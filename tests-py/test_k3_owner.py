@@ -108,6 +108,9 @@ class CutLifecycleTests(__import__('test_plan_submit').SubmittedPlanTests):
         self.assertEqual(self.check()[0], 0)
         self.finish('queen')
         hives.pause_plan(self.conn, 'testproj', REL)
+        # Finishing the synthetic runner also ends its process; PID 42 may
+        # belong to an unrelated live process on a Linux runner.
+        runtime.upsert_agent(self.conn, 'testproj', 'queen', {'pid': None})
         hives.reject_plan(self.conn, 'testproj', REL)
         self.assertIsNone(runtime.kv_get(self.conn, 'testproj', 'cut-verification:' + REL))
         hives.start_again(self.conn, 'testproj', REL)

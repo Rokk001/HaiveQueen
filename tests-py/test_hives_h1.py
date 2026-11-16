@@ -1,3 +1,4 @@
+from unittest import mock
 """Tests for the Plan configuration and plan parsing."""
 import unittest
 
@@ -8,12 +9,12 @@ from haivequeen import plans, scheduler
 class HiveConfigurationTests(unittest.TestCase):
     """Check the requested defaults and machine-wide settings."""
 
-    # A machine starts two Hives and Queens use medium with three Bees.
+    # A machine starts two Hives and Queens use heavy with three Bees.
     def test_hive_defaults(self):
-        """A machine starts two Plans and Queens use medium with three Agents."""
+        """A machine starts two Plans and Queens use heavy with three Agents."""
         settings = scheduler.build_settings({}, {})
         self.assertEqual(settings["hives"], 2)
-        self.assertEqual(settings["queenClass"], "medium")
+        self.assertEqual(settings["queenClass"], "heavy")
         self.assertEqual(settings["beesPerQueen"], 3)
         self.assertEqual(settings["escalateAfter"], 3)
         self.assertFalse(settings.get("preferredProvider"))
@@ -195,9 +196,9 @@ class HiveRoundTests(RoundCase):
         queens = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["phase"] == "queen"]
         self.assertEqual([a["provider"] for a in queens], ["codex"])
 
-    def test_readme_describes_embedded_bee_slot(self):
+    def test_provider_guide_describes_embedded_bee_slot(self):
         from pathlib import Path
-        text = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+        text = (Path(__file__).resolve().parent.parent / "docs/PROVIDERS.md").read_text(encoding="utf-8")
         self.assertNotIn("embedded, small context, no extra slot", text)
         self.assertIn("every Agent takes one slot", text)
 
@@ -794,10 +795,13 @@ class HiveRoundTests(RoundCase):
     # Old elapsed-time stop rules do not create owner questions.
     def test_six_hours_without_integration_does_not_stop_hive(self):
         """Old elapsed-time stop rules do not create owner questions."""
+        from unittest import mock
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "First"}])
         self.agent("Old", phase="work", package="P1", status="done", started=420, ended=410)
         self.agent("Ada", phase="queen", package="P1", status="running", started=10, pid=1234)
-        self.round(alive=lambda pid: True)
+        # This is a simulated runner. A real CI process can reuse its fixture PID.
+        with mock.patch('haivequeen.agent_process.pid_reused', return_value=False):
+            self.round(alive=lambda pid: True)
         self.assertEqual(self.ag("Ada")["status"], "running")
         self.assertEqual(runtime.list_questions(self.conn, "testproj", status="open"), [])
 
@@ -903,9 +907,9 @@ class HiveRoundTests(RoundCase):
         self.assertEqual(len(active), 1)
         self.assertNotEqual(active[0]["name"], original[0]["name"])
 
-    # Questions created by Queens reach the owner without a triage agent.
-    def test_ask_command_opens_owner_question_without_triage(self):
-        """Questions created by Queens reach the owner without a triage agent."""
+    # Questions created by Queens reach the owner after evidence review.
+    def test_ask_command_queues_question_for_triage(self):
+        """Questions created by Queens reach the owner after evidence review."""
         import argparse
         import contextlib
         import io
@@ -914,7 +918,7 @@ class HiveRoundTests(RoundCase):
         args = argparse.Namespace(project="testproj", plan=REL, item="P1", question="Which?", recommendation="A")
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(cli.cmd_ask(args, self.conn), 0)
-        questions = runtime.list_questions(self.conn, "testproj", status="open")
+        questions = runtime.list_questions(self.conn, "testproj", status="triage")
         self.assertEqual(len(questions), 1)
         self.assertEqual(questions[0]["question"], "Which?")
 
@@ -997,7 +1001,8 @@ class HiveRoundTests(RoundCase):
         self.assertEqual(plans.parse_plan_text((self.repo / REL).read_text(encoding="utf-8")).status, "RUNNING")
 
     # Only integration of the Queen's registered row completes her plan.
-    def test_own_integrated_ready_row_finishes_plan(self):
+    @mock.patch("haivequeen.acceptance.prepare", return_value="Prepared acceptance description")
+    def test_own_integrated_ready_row_finishes_plan(self, prepared):
         """Only integration of the Queen's registered row completes her plan."""
         import argparse
         import contextlib

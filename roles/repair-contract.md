@@ -1,0 +1,9 @@
+Technical contract: {objective, why_executable, prerequisites: [{id, status: verified|unresolved, reason, evidence: [report.evidence indexes]}], requires: [verified IDs], resolves: [IDs established], criteria: [{id, expectation, check}], repair: {goal, behavior, criterion, implementation_paths, regression_paths, advances}, workflow: {scope: supplied HQ scope ID, entrypoint: product entrypoint, command, checkpoints: [{id: string, expectation: string}], coverage: {requirement ID: [checkpoint IDs] or {decision: active ID, reason}}, regression_paths}}.
+Keep goal and workflow fixed within the HQ scope. Cover every supplied requirement through the real product success/failure/recovery path, including passing points; helper tests alone do not qualify. HQ reviews a new workflow once against source requirements and decisions. Do not invent requirements or assume unresolved prerequisites. Finish investigation here; delegate behavior changes, not observations or unused components.
+Paths are explicit repository-relative files; implementation and regression paths are disjoint. Workflow files belong to regression_paths. The unchanged positive criterion must fail before and pass after. advances names still-failing workflow checkpoints; improve one without regressing passing points. Legacy receipts cannot establish step_complete. Checkpoints also accept unique string IDs for compatibility. For JSON correction retain findings and applicable logs; do not repeat a probe solely to correct JSON.
+
+The workflow command must use an existing runnable harness in the assigned checkout.
+Inspect its entrypoint and dependencies before proposing it. Do not name a planned
+but absent runner as an executable baseline: resolve that prerequisite in diagnosis
+or select an existing workflow. A missing-file/command error is not a red product
+regression. Preserve the complete required workflow when correcting the command.

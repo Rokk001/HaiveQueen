@@ -7,7 +7,7 @@ import time
 from unittest import mock
 
 from bzztest import REL
-from haivequeen import buildjobs, hives, orchestrator
+from haivequeen import buildjobs, hives, integration, orchestrator
 from test_o1_orchestrator import OTHER, OrchCase
 
 THIRD = "docs/plans/third/THIRD-PLAN.md"
@@ -60,6 +60,21 @@ class SpeculativeQueue(OrchCase):
             self.assertEqual(self.state(plan)["steps"]["Check"], "running")
             self.assertEqual(self.started[plan, "Check"], 1)
         self.assertNotEqual(self.remote_head(), self.git("rev-parse", "HEAD", cwd=self.pwt))
+
+    def test_serial_build_waits_for_earlier_integration(self):
+        """Keep builds and their checks in queue order when the project requires it."""
+        self.project_toml("serialIntegrationBuild = true\n")
+        self.tick()
+        self.finish_step(OTHER, "Check")
+        self.assertEqual(self.started[OTHER, "Build"], 0)
+        self.finish_step(REL, "Check")
+        self.assertEqual(self.started[REL, "Build"], 1)
+        self.assertEqual(self.started[OTHER, "Build"], 0)
+        self.finish_step(REL, "Build")
+        self.assertEqual(self.started[OTHER, "Build"], 0)
+        self.finish_step(REL, "Deploy")
+        self.assertEqual(self.started[OTHER, "Build"], 1)
+        self.assertEqual(self.started[OTHER, "Check"], 1)
 
     def test_parallel_builds_ordered_push_deploy_and_no_recheck(self):
         self.tick()
@@ -135,7 +150,7 @@ class SpeculativeQueue(OrchCase):
         self.assertEqual(self.started[OTHER, "Check"], 2)
         self.assertEqual(self.state(OTHER)["steps"]["Check"], "running")
         self.commit(self.pwt, "fixed.txt")
-        self.end_fixer(self.fixers()[0])
+        self.end_fixer(self.fixers()[0], verification_command='git ls-files --error-unmatch fixed.txt')
         self.failed.discard((REL, step))
         self.finished.update((REL, command) for command in ("Check", "Build", "Deploy"))
         self.tick()
@@ -157,6 +172,30 @@ class SpeculativeQueue(OrchCase):
     def test_red_check_replays_running_check(self):
         self.fail_and_replay("Check", "Check")
 
+    def test_access_failure_invalidates_speculative_followers(self):
+        self.tick()
+        self.assert_contains(self.second, 'first.txt', 'second.txt')
+        orchestrator._red(self.conn, self.env(), REL, self.state(),
+                          'Check', 'remote check: HTTP 403 forbidden')
+        self.assertEqual(self.state()['phase'], 'blocked')
+        self.assertTrue(self.state(OTHER).get('replay'))
+        self.tick()
+        self.assertFalse((self.second / 'first.txt').exists())
+        self.assertEqual(self.started[OTHER, 'Check'], 2)
+        self.assertEqual(self.state()['phase'], 'blocked')
+
+    def test_access_failure_after_publication_keeps_followers(self):
+        self.tick()
+        self.finish_step(REL, 'Check')
+        self.finish_step(REL, 'Build')
+        self.assertEqual(self.state()['step'], 'Deploy')
+        orchestrator._red(self.conn, self.env(), REL, self.state(),
+                          'Deploy', 'deployment: HTTP 403 forbidden')
+        self.assertFalse(self.state(OTHER).get('replay'))
+        self.tick()
+        self.assert_contains(self.second, 'first.txt', 'second.txt')
+        self.assertEqual(self.started[OTHER, 'Check'], 1)
+
     def test_repaired_plan_joins_behind_all_current_queue_members(self):
         self.tick()
         self.failed.add((REL, "Check"))
@@ -174,7 +213,7 @@ class SpeculativeQueue(OrchCase):
         self.assertFalse((self.third / "first.txt").exists())
 
         self.commit(self.pwt, "fixed.txt")
-        self.end_fixer(self.fixers()[0])
+        self.end_fixer(self.fixers()[0], verification_command='git ls-files --error-unmatch fixed.txt')
         self.failed.clear()
         self.tick()
         self.assertEqual(orchestrator._ahead(self.conn, "testproj", REL), [OTHER, THIRD])
@@ -300,6 +339,30 @@ class SpeculativeQueue(OrchCase):
         orchestrator._moved(self.conn, self.env(), REL, state, "Push")
         self.assertTrue(self.state(OTHER)["replay"])
 
+    def test_red_release_keeps_successors_completed_checks_and_builds(self):
+        from haivequeen import publish
+        self.project_toml('wayOfWorking = "local"\ncheckEnabled = true\nbuildEnabled = true\n'
+                          'deployEnabled = true\nreleaseEnabled = true\nreleaseMode = "local"\n')
+        self.tick()
+        for plan in (OTHER, REL):
+            self.finish_step(plan, "Check")
+            self.finish_step(plan, "Build")
+        pushed = self.remote_head()
+        self.assertEqual(pushed, self.state()["pushed"])
+        with mock.patch.object(publish, "pipeline_release", side_effect=publish.ReleaseFailed("upload failed")):
+            self.finish_step(REL, "Deploy")
+        self.assertEqual(self.state()["phase"], "fix")
+        self.assertFalse(self.state(OTHER).get("replay"))
+        self.assertEqual(self.started[OTHER, "Check"], 1)
+        self.assertEqual(self.started[OTHER, "Build"], 1)
+        self.git("merge-base", "--is-ancestor", pushed, self.remote_head())
+        with mock.patch.object(publish, "pipeline_release", return_value="published"):
+            self.finish_step(OTHER, "Deploy")
+        self.assertIsNone(self.state(OTHER))
+        self.assertEqual(self.started[OTHER, "Check"], 1)
+        self.assertEqual(self.started[OTHER, "Build"], 1)
+        self.assert_contains(self.second, "first.txt", "second.txt")
+
     def test_middle_failure_replays_the_tail_onto_the_surviving_prefix(self):
         self.third = self.make_worktree("third-br", "thirdwt")
         self.ready_plan(THIRD, "third-br", self.third, "third.txt")
@@ -416,7 +479,9 @@ class LiveQueue(OrchCase):
         self.machine["maxConcurrentCompileChecks"] = 1
         self.start_merges()
         self.wait_for(lambda: any((folder / "Check.started").exists() for folder in (self.pwt, self.second)))
-        time.sleep(.3)
+        lock = integration._compile_lock_path()
+        previous = lock.stat().st_mtime_ns
+        self.wait_for(lambda: lock.stat().st_mtime_ns != previous)
         self.assertEqual(sum((folder / "Check.started").exists() for folder in (self.pwt, self.second)), 1)
         (self.base / "Check.release").touch()
         self.wait_for(lambda: all((folder / "Check.started").exists() for folder in (self.pwt, self.second)))
@@ -514,10 +579,10 @@ class LiveQueue(OrchCase):
             drive(lambda: bool(self.fixers()))
             self.assertEqual(len(self.fixers()), 1)
             self.commit(self.pwt, "fixed.txt")
-            self.end_fixer(self.fixers()[0])
+            self.end_fixer(self.fixers()[0], verification_command='git ls-files --error-unmatch fixed.txt')
             self.failed.clear()
             self.finished.update((REL, step) for step in ("Check", "Build", "Deploy"))
-            drive(lambda: self.state()["step"] == "Push")
+            drive(lambda: self.state()["phase"] == "pipeline" and self.state()["step"] == "Push")
             self.assertEqual(orchestrator._ahead(self.conn, "testproj", REL), [OTHER])
             self.release_workers()
             drive(lambda: self.state() is None and self.state(OTHER) is None)

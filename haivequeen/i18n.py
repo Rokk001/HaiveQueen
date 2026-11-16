@@ -158,6 +158,7 @@ _LIVE_LABEL = r"(Commit(?:: .*?)?|Push|Compile test|Check \S+|changed: .*?|ready
 
 # Why a worktree cleanup kept a worktree or could not remove it: the start of the English text and its German form.
 _WORKTREE_REASONS = (
+    ("invalid build output allowlist", "ungültige Freigabeliste für Build-Ausgaben"),
     ("HEAD cannot be read", "HEAD nicht lesbar"),
     ("used by a plan that is not finished", "von einem nicht beendeten Plan benutzt"),
     ("protected worktree", "geschützter Worktree"),
@@ -209,6 +210,9 @@ _WORKTREE_REASONS = (
 
 
 _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
+    (r"^Created draft$", "Entwurf erstellt"),
+    (r"^Saved draft$", "Entwurf gespeichert"),
+    (r"^Global plan control: (.*)$", r"Globale Plansteuerung: \1"),
     (r"^Waiting for build cores$", "Wartet auf Build-Kerne"),
     (r"^Owner action: (.*)$", r"Aktion des Owners: \1"),
     # ---- the Orchestrator pipeline
@@ -326,6 +330,8 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
     (r'^Plan state "(.*?)"(?: \(questions (.*)\))?$', lambda m: "Plan-Zustand %s%s" % (m.group(1), " (Fragen %s)" % m.group(2) if m.group(2) else "")),
     (r"^waiting for the build: (.*)$", lambda m: "Wartet auf den Build: " + _german_line(m.group(1))),
     (r"^waiting for provider (\S+): (.*)$", lambda m: "Wartet auf Anbieter %s: %s" % (m.group(1), _german_line(m.group(2)))),
+    (r"^waiting for evidence-based package diagnosis before another repair attempt$", "Wartet auf eine evidenzbasierte Paketdiagnose vor einem weiteren Reparaturversuch"),
+    (r"^remaining packages await diagnosis or its required answer$", "Verbleibende Pakete warten auf die Diagnose oder die erforderliche Antwort"),
     (r"^waiting for the integration place$", "Wartet auf den Integrationsplatz"),
     (r"^completion reported: the check of the result is pending$", "Fertigmeldung liegt vor, die Prüfung des Ergebnisses steht aus"),
     (r"^handing off, Agent processes are still running$", "Übergabe, Agent-Prozesse laufen noch"),
@@ -400,6 +406,11 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
 
 GERMAN = {
     "Questions": "Fragen", "Limits": "Grenzen", "Queue": "Warteschlange",
+    "Pause %s plans? Running work continues; no new work starts.": "%s Pläne pausieren? Laufende Arbeiten werden fortgesetzt; neue Arbeiten starten nicht.",
+    "Force stop %s plans? Their running work will end immediately.": "%s Pläne sofort stoppen? Ihre laufenden Arbeiten werden sofort beendet.",
+    "Resume %s paused plans?": "%s pausierte Pläne fortsetzen?",
+    "Plans processed: %s": "Bearbeitete Pläne: %s",
+    "The plan cannot resume yet. Refresh its status.": "Der Plan kann noch nicht fortgesetzt werden. Aktualisiere seinen Status.",
     "Clear": "Leeren", "Resume": "Fortsetzen", "Update": "Aktualisieren",
     "Coding (including tests, docs and review)": "Programmierung (einschließlich Tests, Dokumentation und Prüfung)",
     "Queen (plan cutting and coordination)": "Queen (Planaufteilung und Koordination)",
@@ -487,7 +498,7 @@ GERMAN = {
     "Keys": "Tasten",
     "P  pause / resume\nQ  answer the open questions\nSpace  pause / resume the selected plan\nF  next project filter\nM / right click  queen menu of the plan or the Queen row\nTab  switch between the Plans and the Queens and Agents table\nUp/Down  select a row of that table\nClick  select a row\nEnter / double click  live output of the row\nX  stop the selected agent\nC  clear log   S  save log   A  auto-scroll\nL / double click on LOGS  big log   N  routine round lines   Esc  remove the log filter":
         'P  Pause / Weiter\nQ  offene Fragen beantworten\nLeertaste  gewählten Plan pausieren / fortsetzen\nF  nächster Projekt-Filter\nM / Rechtsklick  Queen-Menü des Plans oder der Queen-Zeile\nTab  zwischen der Plan- und der Queens-und-Agenten-Tabelle wechseln\nHoch/Runter  Zeile dieser Tabelle wählen\nKlick  Zeile wählen\nEnter / Doppelklick  Live-Ausgabe der Zeile\nX  gewählte Agent stoppen\nC  Log leeren   S  Log speichern   A  Auto-Scroll\nL / Doppelklick auf LOG  großes Log   N  Routine-Rundenzeilen   Esc  Log-Filter entfernen',
-    "Start HaiveQueen": "HaiveQueen starten", "Stopping: running agents finish their task first": "Stoppt: laufende Agenten beenden zuerst ihre Aufgabe",
+    "Stopping": "Wird beendet", "Start HaiveQueen": "HaiveQueen starten", "Stopping: running agents finish their task first": "Stoppt: laufende Agenten beenden zuerst ihre Aufgabe",
     "Resume new starts": "Neue Starts fortsetzen", "Pause new starts": "Neue Starts pausieren", "Stop HaiveQueen": "HaiveQueen stoppen",
     # ---- hive states and blockers
     "Plan limit %s reached": "Plan-Limit %s erreicht", "Not enough free RAM: %s": "Zu wenig freier RAM: %s", "No free provider with a Queen model": "Kein freier Anbieter mit Queen-Modell",
@@ -502,6 +513,7 @@ GERMAN = {
     "Publish release at integration": "Release bei der Integration veröffentlichen", "Next version (empty: count the last digit up)": "Nächste Version (leer: letzte Stelle hochzählen)",
     "Next version: three numbers like 2.1.0 are expected": "Nächste Version: drei Zahlen wie 2.1.0 erwartet",
     "update.checkHours: a number of hours from 0 up is expected (0 = no daily check)": "update.checkHours: eine Stundenzahl ab 0 erwartet (0 = keine tägliche Prüfung)",
+    "Running %s": "Läuft mit %s", "Update to %s": "Auf %s aktualisieren",
     "Check now": "Jetzt prüfen", "checking for updates…": "suche nach Updates…", "New version available: %s – Update": "Neue Version verfügbar: %s – Aktualisieren",
     "Install version %s now? HaiveQueen starts no new Queen or Agent, waits until every running agent has ended, installs the new version and restarts.":
         'Version %s jetzt installieren? HaiveQueen startet keine neue Queen und keinen neuen Agenten mehr, wartet, bis jeder laufende Agent beendet ist, installiert die neue Version und startet neu.',
@@ -514,6 +526,8 @@ GERMAN = {
     "Waiting for owner check": "Wartet auf Owner-Prüfung", "Waiting for answer": "Wartet auf Antwort", "No active Queen": "Keine aktive Queen", "; open questions %s": "; offene Fragen %s", "Done": "Fertig", "Resting until %s": "Ruht bis %s",
     "Queenless": "Ohne Queen", "Waiting for Codex": "Wartet auf Codex", "Waiting for provider": "Wartet auf Anbieter", "Handoff": "Übergabe", "Waiting to start": "Wartet auf Start",
     "Plan rejected": "Plan abgelehnt", "Running, plan paused": "Läuft, Plan pausiert", "Plan paused": "Plan pausiert", "Running": "Läuft", "Idle": "Untätig",
+    "Plan file missing": "Plandatei fehlt", "Recovery blocked": "Wiederherstellung blockiert",
+    "Archived snapshot from this run.": "Archivierte Kopie dieses Laufs.",
     # ---- limits and status panel
     "resets %s": "Rücksetzung %s", "new window": "neues Fenster", "no medium model": "kein Medium-Modell",
     "Agent slots of %s: %d of %d in use. A filled cell is a running agent, an empty cell a free slot.": "Agent-Slots von %s: %d von %d belegt. Eine volle Wabe ist ein laufender Agent, eine leere ein freier Slot.",
@@ -552,6 +566,7 @@ GERMAN = {
     "Use recommendation": "Empfehlung übernehmen", "Answer": "Antworten", "No open questions.": "Keine offenen Fragen.", "%s\n\nRecommendation:\n%s": "%s\n\nEmpfehlung:\n%s",
     "question %s is already answered": "Frage %s ist bereits beantwortet", "unknown question %s": "unbekannte Frage %s",
     # ---- settings window
+    "Total CPU budget for builds and checks": "Gesamtes CPU-Budget für Builds und Checks",
     "CPU cores per build": "CPU-Kerne pro Build", "Parallel builds": "Parallele Builds", "Minimum free RAM before a build": "Mindestens freier RAM vor einem Build",
     "How many of your processor cores builds may use in total; a build uses fewer when the free RAM is short.": "Wie viele deiner Prozessorkerne Builds insgesamt nutzen dürfen; ein Build nutzt weniger, wenn der freie RAM knapp ist.",
     "How many targets the build command builds at the same time (the number after --parallel); each target gets the cores divided by this number.": "Wie viele Ziele der Build-Befehl gleichzeitig baut (die Zahl nach --parallel); jedes Ziel bekommt die Kerne geteilt durch diese Zahl.",
@@ -599,6 +614,7 @@ GERMAN = {
     "provider %s: capability thresholds must be a table": "Anbieter %s: Fähigkeitsschwellen müssen eine Tabelle sein",
     "provider %s: capability threshold must be a whole percent from 1 to 100": "Anbieter %s: Die Fähigkeitsschwelle muss eine ganze Prozentzahl von 1 bis 100 sein",
     "provider %s: server %s does not exist": "Anbieter %s: der Server %s existiert nicht",
+    "Local LLM connection test failed (HTTP %s)": "Verbindungstest zum lokalen LLM fehlgeschlagen (HTTP %s)",
     "The server does not answer at %s": "Der Server antwortet nicht unter %s", "The server answers but refuses the API key": "Der Server antwortet, lehnt aber den API-Schlüssel ab",
     "%s: usable (%s)": "%s: nutzbar (%s)", "%s: not usable, the server does not offer %s": "%s: nicht nutzbar, der Server bietet %s nicht an",
     "Not tested yet": "Noch nicht getestet", "Tested at %s": "Getestet um %s",
@@ -658,6 +674,8 @@ GERMAN = {
     'The command that compiles the code and runs the tests before integration; empty: no compile check.': 'Der Befehl, der den Code kompiliert und vor der Integration die Tests ausführt; leer: keine Kompilierprüfung.',
     'Reads AGENTS.md and CLAUDE.md of the Git remote named upstream (last fetch) or of the upstream folder.': 'Liest AGENTS.md und CLAUDE.md des Git-Remotes namens upstream (letzter Fetch) oder des Upstream-Ordners.',
     'Queen class': 'Queen-Klasse',
+    'Question / diagnosis agent class': 'Klasse des Frage- und Diagnose-Agenten',
+    'The class used to review technical questions; model and effort come from the provider settings for this class.': 'Die Klasse zur Pruefung technischer Fragen; Modell und Effort stammen aus den Anbieter-Einstellungen dieser Klasse.',
     'Agents per Queen': 'Agenten pro Queen',
     'The model class of the Queens (light, medium or heavy).': 'Die Modellklasse der Queens (light, medium oder heavy).',
     'How many Agents a Queen may have running at the same time.': 'Wie viele Agenten eine Queen gleichzeitig laufen haben darf.',
@@ -796,6 +814,261 @@ GERMAN.update({"Overview": "Übersicht", "Technical information": "Technische An
 GERMAN.update({
     "7d %d %% used · %d %% left · %s": "7T %d %% verbraucht · %d %% übrig · %s",
     "5h %d %% used": "5h %d %% verbraucht",
+    "Last reading: %s": "Letzte Messung: %s",
     "Ready": "Bereit", "Not ready": "Nicht bereit", "Package": "Paket",
     "Last recorded quota; live quota unavailable": "Letzter gespeicherter Verbrauch; Live-Abfrage nicht verfügbar",
+})
+
+GERMAN.update({'Copy': 'Kopieren',
+ 'Copy text': 'Text kopieren',
+ 'Copied': 'Kopiert',
+ 'Copy failed': 'Kopieren fehlgeschlagen',
+ 'Copy failed. Select the text and copy it manually.': 'Kopieren fehlgeschlagen. Bitte den Text markieren '
+                                                       'und manuell kopieren.',
+ 'Select a project': 'Projekt auswählen',
+ 'Choose a project to see its published releases.': 'Projekt auswählen, um seine veröffentlichten Releases '
+                                                    'anzuzeigen.',
+ 'Could not load releases': 'Releases konnten nicht geladen werden',
+ 'Loading releases…': 'Releases werden geladen…',
+ 'Fetching release history for the selected project.': 'Release-Verlauf des ausgewählten Projekts wird '
+                                                       'abgerufen.',
+ 'No releases yet': 'Noch keine Releases',
+ 'This project has no published releases.': 'Für dieses Projekt wurden noch keine Releases veröffentlicht.',
+ 'Try again': 'Erneut versuchen',
+ 'Prerelease': 'Vorabversion',
+ 'Stable': 'Stabil',
+ 'Git provider login': 'Git-Zugänge',
+ 'One access token is shared by all projects for each Git provider.': 'Pro Git-Anbieter verwenden alle '
+                                                                      'Projekte denselben Zugangstoken.',
+ 'Current method': 'Aktueller Zugang',
+ 'Access token': 'Zugangstoken',
+ 'Existing access': 'Vorhandener Zugang',
+ 'Save access token': 'Zugangstoken speichern',
+ 'HTTPS server origin': 'HTTPS-Serveradresse'})
+
+GERMAN.update({'Access present': 'Zugang vorhanden', 'Not configured': 'Nicht eingerichtet', 'Check access': 'Zugang prüfen', 'Login status unknown': 'Loginstatus unbekannt'})
+
+GERMAN.update({'Always on': 'Immer an', 'Step is off; it will be skipped.': 'Schritt ist aus und wird ausgelassen.', 'Executed by the Git provider.': 'Ausführung beim Git-Anbieter.', 'Executed locally by HaiveQueen.': 'Lokale Ausführung durch HaiveQueen.'})
+
+GERMAN.update({
+    'Trusted proxy IP addresses (one per line)': 'Vertrauenswuerdige Proxy-IP-Adressen (eine pro Zeile)',
+    'Empty: trust local and private network addresses. Enter proxy IP addresses, one per line, to trust only those proxies. Direct HTTP access remains available.': 'Leer: lokalen und privaten Netzwerkadressen vertrauen. Proxy-IP-Adressen zeilenweise eintragen, um nur diesen Proxys zu vertrauen. Direkter HTTP-Zugriff bleibt moeglich.',
+})
+
+GERMAN.update({
+    "Execution mode": "Ausführungsmodus",
+    "Project / Plan / Process": "Projekt / Plan / Prozess",
+    "Progress / Task": "Fortschritt / Aufgabe",
+    "Expand or collapse": "Auf- oder zuklappen",
+})
+
+GERMAN.update({
+    'Slow tests': 'Langsame Tests',
+    'Measured durations from the entire recorded console output.': 'Gemessene Laufzeiten aus der gesamten gespeicherten Konsolenausgabe.',
+    'Indexing recorded test durations…': 'Gespeicherte Testlaufzeiten werden ausgewertet…',
+    'No individual test durations available': 'Keine Einzeltest-Laufzeiten verfügbar',
+    'Additional measurements remain in the original log': 'Weitere Messungen stehen im ursprünglichen Protokoll',
+    'Slow test threshold (seconds)': 'Schwelle für langsame Tests (Sekunden)',
+    'Show measured individual tests at or above this duration in log details; advisory only, no automatic retry or blocking.': 'Einzeltests ab dieser gemessenen Dauer in den Logdetails anzeigen; nur ein Hinweis, keine automatische Wiederholung oder Blockade.',
+    'Slow test threshold: a finite number above zero is required': 'Testlaufzeit-Schwelle: Eine endliche Zahl größer als null ist erforderlich',
+    'No tests above the threshold in this excerpt': 'Keine Tests ab der Schwelle in diesem Ausschnitt',
+    'No individual test durations available in this excerpt': 'Keine Einzeltest-Laufzeiten in diesem Ausschnitt verfügbar',
+    'Measured durations in the loaded log excerpt only. A long duration does not prove unnecessary waiting. No additional tests are started.': 'Gemessene Laufzeiten nur aus dem geladenen Logausschnitt. Eine lange Laufzeit belegt keine unnötige Wartezeit. Es werden keine zusätzlichen Tests gestartet.',
+})
+
+# Task-oriented settings navigation.
+GERMAN.update({
+    'System':'System', 'AI providers':'KI-Anbieter', 'Git connections':'Git-Verbindungen',
+    'Basics':'Grundlagen', 'Workflow and checks':'Ablauf und Prüfungen', 'Agent rules':'Agent-Regeln',
+    'Git and cleanup':'Git und Aufräumen', 'Resources':'Ressourcen', 'Agent control':'Agent-Steuerung',
+    'Web access':'Webzugriff', 'Data and retention':'Daten und Aufbewahrung', 'Updates':'Updates',
+    'Connection':'Verbindung', 'Models and effort':'Modelle und Effort', 'Use and limits':'Einsatz und Limits',
+    'Tools and MCP':'Tools und MCP', 'Settings sections':'Einstellungsbereiche',
+    'Search settings':'Einstellungen suchen', 'No matching settings':'Keine passenden Einstellungen',
+    'default branch':'Standardbranch', 'Apply template':'Vorlage anwenden',
+    'Apply execution template':'Ausführungsvorlage anwenden',
+    'Replaces the location of every step. Enabled steps and commands are preserved.':'Ändert den Ausführungsort aller Schritte. Aktivierte Schritte und Befehle bleiben erhalten.',
+    'Save applies to this page. Running agents keep their current configuration; new starts use saved settings.':'Speichern gilt für diese Seite. Laufende Agents behalten ihre Konfiguration; neue Starts verwenden die gespeicherten Einstellungen.',
+    'Web settings can reconfigure the web listener when saved. Resource limits apply at the next scheduling decision.':'Webeinstellungen können beim Speichern den Webserver umkonfigurieren. Ressourcenlimits gelten bei der nächsten Zuteilung.',
+    'Credentials are saved separately for each connection and shared across projects.':'Zugangsdaten werden pro Verbindung separat gespeichert und projektübergreifend verwendet.',
+    'Save changes before using connection actions.':'Änderungen vor dem Anmelden oder Prüfen der Verbindung speichern.',
+    'These files are supplied by HQ. A CLI may still load its own rules when HQ injection is disabled.':'HQ gibt diese Dateien mit. Eine CLI kann ihre eigenen Regeln auch bei ausgeschalteter HQ-Einbindung laden.',
+    'Scope: this project. Models, agent resources and access are configured in AI providers and System.':'Gilt für dieses Projekt. Modelle, Agent-Ressourcen und Zugänge stehen unter KI-Anbieter und System.',
+    'Scope: all projects on this installation.':'Gilt für alle Projekte dieser Installation.',
+    'Legacy integration prompt':'Veralteter Integrationsprompt',
+    'Legacy field; integration is controlled by the Orchestrator, not a Queen.':'Altlast: Die Integration steuert der Orchestrator, keine Queen.',
+    'Failed attempts trigger diagnosis before another attempt or a more expensive model is authorized.':'Nach fehlgeschlagenen Versuchen prüft eine Diagnose, ob ein neuer Versuch oder ein teureres Modell begründet ist.',
+    'Minimum free RAM for agent starts (MiB)':'Freier RAM für Agent-Starts (MiB)',
+    'Agent starts wait below this threshold. Builds have a separate RAM threshold. An explicit minFreeRamGB value overrides this fallback.':'Agent-Starts warten unter dieser Grenze. Builds haben eine separate RAM-Grenze. Ein expliziter minFreeRamGB-Wert hat Vorrang vor diesem Rückfallwert.',
+})
+
+GERMAN.update({'Repository default':'Repository-Vorgabe','Application default':'Anwendungsvorgabe'})
+
+GERMAN.update({'Minimum free RAM for agent starts (GiB)':'Freier RAM für Agent-Starts (GiB)','Overrides the legacy agent RAM reserve; independent of the build RAM threshold.':'Ersetzt die alte Agent-RAM-Reserve; unabhängig von der Build-RAM-Grenze.'})
+
+GERMAN['When changes take effect'] = 'Wann Änderungen wirksam werden'
+
+GERMAN.update({'Release readiness gate': 'Bereitschaftsprüfung freigeben',
+ 'Allow this plan past the readiness check? This does not publish a release.': 'Diesen Plan trotz '
+                                                                               'Bereitschaftsprüfung '
+                                                                               'freigeben? Dies '
+                                                                               'veröffentlicht kein Release.',
+ 'Open questions and acceptance': 'Offene Fragen und Abnahme',
+ 'No open questions for this plan.': 'Keine offenen Fragen zu diesem Plan.',
+ 'Edit draft': 'Entwurf bearbeiten',
+ 'New plan': 'Neuer Plan',
+ 'Continue draft': 'Entwurf fortsetzen',
+ 'Save Markdown as a draft, then submit it explicitly to start preparation.': 'Markdown als Entwurf '
+                                                                              'speichern und anschließend '
+                                                                              'ausdrücklich einreichen, um '
+                                                                              'die Vorbereitung zu starten.',
+ 'Plan files': 'Plandateien',
+ 'Plan Markdown': 'Plan als Markdown',
+ 'Import Markdown': 'Markdown importieren',
+ 'Choose a Markdown (.md) file.': 'Eine Markdown-Datei (.md) auswählen.',
+ 'Submit plan': 'Plan einreichen',
+ 'Save the draft before submitting.': 'Den Entwurf vor dem Einreichen speichern.',
+ 'Submit this draft for preparation?': 'Diesen Entwurf zur Vorbereitung einreichen?',
+ 'Save draft': 'Entwurf speichern',
+ 'Draft saved. Submit when ready.': 'Entwurf gespeichert. Bei Bereitschaft einreichen.',
+ 'Acceptance': 'Abnahme',
+ 'Decision': 'Entscheidung',
+ 'Question': 'Frage',
+ 'Open': 'Offen',
+ 'Answered history': 'Antwortverlauf',
+ 'Show all questions': 'Alle Fragen anzeigen',
+ 'No answered questions yet.': 'Noch keine beantworteten Fragen.',
+ 'Answered': 'Beantwortet',
+ 'Full question and report': 'Vollständige Frage und Bericht',
+ 'This entry is preserved as history.': 'Dieser Eintrag bleibt im Verlauf erhalten.',
+ 'Review the result. Save note records feedback; only Accept or Reject decides the outcome.': 'Ergebnis '
+                                                                                              'prüfen. Notiz '
+                                                                                              'speichern '
+                                                                                              'hält '
+                                                                                              'Rückmeldungen '
+                                                                                              'fest; nur '
+                                                                                              'Annehmen oder '
+                                                                                              'Ablehnen '
+                                                                                              'entscheidet '
+                                                                                              'über das '
+                                                                                              'Ergebnis.',
+ 'Your answer is recorded for the plan so work can continue.': 'Deine Antwort wird für den Plan gespeichert, '
+                                                               'damit die Arbeit weitergehen kann.',
+ 'Context and evidence': 'Kontext und Nachweise',
+ 'Note or acceptance feedback': 'Notiz oder Rückmeldung zur Abnahme',
+ 'Apply answer to the whole project': 'Antwort für das gesamte Projekt übernehmen',
+ 'Unchecked: this plan only. Checked: store a project decision for future work.': 'Ohne Häkchen: nur dieser '
+                                                                                  'Plan. Mit Häkchen: eine '
+                                                                                  'Projektentscheidung für '
+                                                                                  'künftige Arbeiten '
+                                                                                  'speichern.',
+ 'Select the packages needing rework. Leave empty to reject the overall result.': 'Pakete auswählen, die '
+                                                                                  'nachgebessert werden '
+                                                                                  'müssen. Leer lassen, um '
+                                                                                  'das Gesamtergebnis '
+                                                                                  'abzulehnen.',
+ 'Accept the plan result?': 'Das Planergebnis annehmen?',
+ 'Reject the result and request rework?': 'Das Ergebnis ablehnen und Nachbesserung anfordern?',
+ 'Saved note': 'Gespeicherte Notiz'})
+
+GERMAN.update({'Integrated commit':'Integrierter Commit','Steps that ran':'Ausgef\u00fchrte Schritte','Accepted':'Angenommen'})
+
+GERMAN['Unsaved changes'] = 'Ungespeicherte Änderungen'
+
+GERMAN.update({'Messages': 'Nachrichten',
+ 'pending': 'offen',
+ 'Conversation': 'Unterhaltung',
+ 'Needs you': 'Braucht dich',
+ 'All': 'Alle',
+ 'Recorded history': 'Gespeicherter Verlauf',
+ 'No recorded questions.': 'Keine gespeicherten Fragen.',
+ 'No questions need your answer.': 'Keine Fragen brauchen deine Antwort.',
+ 'No conversations match this filter.': 'Keine Unterhaltungen passen zu diesem Filter.',
+ 'Choose a plan conversation.': 'Eine Planunterhaltung auswählen.',
+ 'All conversations': 'Alle Unterhaltungen',
+ 'Recorded questions and answers': 'Gespeicherte Fragen und Antworten',
+ 'Latest saved note': 'Zuletzt gespeicherte Notiz',
+ 'Full text': 'Vollständiger Text',
+ 'Choose the question to answer': 'Frage zum Beantworten auswählen',
+ 'Answer options': 'Antwortoptionen',
+ 'Specific packages': 'Bestimmte Pakete',
+ 'Request changes': 'Nachbesserung anfordern',
+ 'Latest recorded answer': 'Zuletzt gespeicherte Antwort'})
+
+GERMAN.update({'Back to %s':'Zurück zu %s','View':'Ansicht'})
+
+GERMAN['# Plan title\n\nDescribe what should change and the result you expect.\n'] = '# Plantitel\n\nBeschreibe, was sich ändern soll und welches Ergebnis du erwartest.\n'
+
+GERMAN['Add a project before creating a plan.'] = 'Vor dem Erstellen eines Plans ein Projekt hinzufügen.'
+
+GERMAN.update({'Search plan name, path or project':'Planname, Pfad oder Projekt suchen','Search plans':'Pläne suchen','All projects':'Alle Projekte','All statuses':'Alle Status','Clear filters':'Filter zurücksetzen','%s of %s plans':'%s von %s Plänen','No plans match these filters.':'Keine Pläne passen zu diesen Filtern.','No plans available.':'Keine Pläne vorhanden.'})
+
+GERMAN.update({'Draft': 'Entwurf',
+ 'Submitted': 'Eingereicht',
+ 'Preparing': 'In Vorbereitung',
+ 'Queued': 'Eingeplant',
+ 'Ready for review': 'Bereit zur Abnahme',
+ 'Paused': 'Pausiert',
+ 'Cancelled': 'Abgebrochen',
+ 'Unknown': 'Unbekannt',
+ 'Find a plan…': 'Plan finden…',
+ 'Drafts': 'Entwürfe',
+ 'Review': 'Abnahme',
+ 'Loading messages…': 'Nachrichten werden geladen…',
+ '1 question': '1 Rückfrage',
+ '%s questions': '%s Rückfragen',
+ '1 acceptance': '1 Abnahme',
+ '%s acceptances': '%s Abnahmen',
+ 'View conversation': 'Verlauf ansehen',
+ 'No open questions': 'Keine offenen Rückfragen',
+ 'View result': 'Ergebnis ansehen',
+ 'View plan': 'Plan ansehen',
+ 'No plans yet': 'Noch keine Pläne',
+ 'Try another search or clear the filters.': 'Anders suchen oder die Filter zurücksetzen.',
+ 'Create a plan to describe the result you want.': 'Erstelle einen Plan und beschreibe das gewünschte '
+                                                   'Ergebnis.',
+ 'Needs attention': 'Prüfung nötig'})
+
+GERMAN.update({'Your review needed':'Deine Abnahme nötig','Your answer needed':'Deine Antwort nötig','Review result':'Ergebnis prüfen','Review %s results':'%s Ergebnisse prüfen','Answer question':'Frage beantworten','Answer %s questions':'%s Fragen beantworten','Plan issue':'Problem mit dem Plan','Loading plans…':'Pläne werden geladen…'})
+
+GERMAN.update({
+ 'Starting release publication...': 'Release-Veröffentlichung wird gestartet...',
+ 'Publishing release...': 'Release wird veröffentlicht...',
+ 'Checking selected prerelease...': 'Ausgewähltes Pre-Release wird geprüft...',
+ 'Requesting release publication...': 'Release-Veröffentlichung wird angefordert...',
+ 'Verifying and copying release assets...': 'Release-Dateien werden geprüft und kopiert...',
+ 'Publication requested; the provider workflow must still finish.': 'Veröffentlichung angefordert; der Provider-Workflow muss noch abschließen.',
+ 'Release publication finished.': 'Release-Veröffentlichung abgeschlossen.',
+ 'Publication request was not accepted.': 'Veröffentlichungsauftrag wurde nicht angenommen.'})
+
+
+GERMAN.update({
+    'Publishing…': 'Wird veröffentlicht…',
+    'Publication failed': 'Veröffentlichung fehlgeschlagen',
+    'Promoted to %s': 'Als %s veröffentlicht',
+    'View full release': 'Vollrelease anzeigen',
+    'Waiting for full release confirmation': 'Wartet auf Bestätigung des Vollrelease',
+})
+
+GERMAN['Starting update to %s'] = 'Update auf %s wird gestartet'
+
+GERMAN.update({'Orchestrator stopped': 'Orchestrator gestoppt',
+               'Orchestrator stopping': 'Orchestrator wird gestoppt',
+               'Orchestrator paused': 'Orchestrator pausiert',
+               'Waiting for scheduler reassessment': 'Wartet auf erneute Startprüfung'})
+
+GERMAN['Diagnosis running: %s'] = 'Diagnose l\u00e4uft: %s'
+GERMAN['Integration failed: %d checks red. Further checks running for diagnosis: %d/%s completed.'] = 'Integration fehlgeschlagen: %d Checks rot. Weitere Checks laufen zur Fehlerdiagnose: %d/%s abgeschlossen.'
+GERMAN['Integration place released; diagnostic resources remain reserved.'] = 'Integrationsplatz freigegeben; Diagnose-Ressourcen bleiben reserviert.'
+GERMAN['Integration place retained: %s'] = 'Integrationsplatz bleibt belegt: %s'
+
+GERMAN.update({'Release publication': 'Release-Veröffentlichung',
+               'Provider setup': 'Provider-Einrichtung', 'Provider benchmark': 'Provider-Benchmark',
+               'Tool installation': 'Werkzeuginstallation', 'Error details': 'Fehlerdetails',
+               'Publication requested; confirmation is available in Releases.':
+               'Veröffentlichung angefordert; Bestätigung unter Releases prüfen.'})
+
+GERMAN.update({
+    "Heavy is recommended for Queen coordination. Configure a capable model and suitable reasoning effort for this class in Providers; existing choices are preserved.": "Heavy wird für die Queen-Koordination empfohlen. Konfiguriere unter Anbieter ein leistungsfähiges Modell und eine passende Denkstufe; bestehende Einstellungen bleiben erhalten.",
+    "Heavy is recommended for question, package and integration diagnosis; model and effort come from Providers. Higher effort can cost more; class alone does not guarantee quality.": "Heavy wird für Fragen-, Paket- und Integrationsdiagnosen empfohlen; Modell und Denkstufe stammen aus Anbieter. Mehr Denkaufwand kann mehr kosten; die Klasse allein garantiert keine Qualität.",
 })

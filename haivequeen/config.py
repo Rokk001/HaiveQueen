@@ -3,11 +3,12 @@ import tomllib
 from pathlib import Path
 
 from haivequeen import platform as osplat
-from . import filetxn
+from . import filetxn, credential_store
 
 APP = "HaiveQueen"
 
 DEFAULT_CONFIG = {
+    "slowTestSeconds": 10,  # advisory threshold for measured individual test durations
     "providers": [],
     "slots": 2,
     "weeklyLimitSources": [],
@@ -85,3 +86,42 @@ def load_project(workspace) -> dict:
     if not data["name"]:
         data["name"] = ws.name
     return data
+
+def git_credential(provider):
+    """Read a provider-wide credential from the user's settings directory."""
+    import json
+    try:
+        path = config_dir() / 'git-credentials.json'
+    except RuntimeError:
+        return None
+    contents = filetxn.read(path)
+    credential = credential_store.decode(contents).get(provider)
+    if credential and 'expires_at' in credential:
+        from .git_auth import refresh_credential
+        return refresh_credential(provider, credential)
+    return credential
+
+
+@filetxn.coordinated
+def save_git_credential(provider, token, method='token', origin=None, oauth=None):
+    """Store or remove a provider credential without touching a repository."""
+    import json
+    if provider not in ('github', 'gitlab', 'gitea', 'bitbucket', 'azure'):
+        raise ValueError('unknown Git provider')
+    if token is not None and (not isinstance(token, str) or not token or any(c.isspace() for c in token)):
+        raise ValueError('invalid token')
+    if not isinstance(method, str) or not method:
+        raise ValueError('invalid authentication method')
+    path = config_dir() / 'git-credentials.json'
+    contents = filetxn.read(path)
+    credentials = credential_store.decode(contents)
+    if token is None:
+        credentials.pop(provider, None)
+    else:
+        credentials[provider] = {'token': token, 'method': method}
+        if oauth is not None:
+            credentials[provider].update(oauth)
+        if origin is not None:
+            credentials[provider]['origin'] = origin.rstrip('/')
+    filetxn.atomic_write(path, credential_store.encode(credentials),
+                         mode=0o600 if __import__('os').name != 'nt' else None)

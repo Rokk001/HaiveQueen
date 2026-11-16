@@ -1,3 +1,53 @@
+function testTimingNotice(document,t,text,threshold,record=null) {
+  const make=(tag,text)=>{const node=document.createElement(tag);node.textContent=text;return node;};
+  const rows=[];
+  for(const line of text.split(/\r?\n/)){
+    // Only explicit duration records, never overall run times or arbitrary status text.
+    let m=line.match(/^\s*(\d+(?:\.\d+)?)s\s+(call|setup|teardown)\s+(.+)$/);
+    if(m){rows.push({name:m[3]+' ('+m[2]+')',seconds:Number(m[1])});continue;}
+    m=line.match(/^\s*(\d+(?:\.\d+)?)s\s+(test\S+\s+\(.+\))\s*$/);
+    if(m){rows.push({name:m[2],seconds:Number(m[1])});continue;}
+    m=line.match(/^\s*(\S+\.py)\s+exit=-?\d+\s+seconds=(\d+(?:\.\d+)?)\s*$/);
+    if(m)rows.push({name:m[1],seconds:Number(m[2])});
+  }
+  if(record && !record.unavailable){rows.length=0;rows.push(...record.rows);}
+  const slow=rows.filter(row=>Number.isFinite(row.seconds)&&row.seconds>=threshold).sort((a,b)=>b.seconds-a.seconds);
+  const box=document.createElement('details');box.className='test-timing-notice';
+  if(record && !record.unavailable){
+    box.append(make('summary',t('Slow tests')+': '+record.count+' · ≥ '+threshold+' s'));
+    box.append(make('p',t(record.complete?'Measured durations from the entire recorded console output.':'Indexing recorded test durations…')));
+    if(!record.measured)box.append(make('p',t('No individual test durations available')));
+    if(record.omitted)box.append(make('p',t('Additional measurements remain in the original log')+': '+record.omitted));
+  } else box.append(make('summary',slow.length?t('Slow tests')+': '+slow.length+' · ≥ '+threshold+' s':t(rows.length?'No tests above the threshold in this excerpt':'No individual test durations available in this excerpt')));
+  if(!record || record.unavailable)box.append(make('p',t('Measured durations in the loaded log excerpt only. A long duration does not prove unnecessary waiting. No additional tests are started.')));
+  if(slow.length){const list=document.createElement('ul');for(const row of slow)list.append(make('li',row.name+' · '+row.seconds+' s'));box.append(list);}
+  return box;
+}
+class LogPager {
+  constructor(){this.run='';this.source='';this.restart();}
+  restart(cursor=null){const carry=cursor&&cursor===this.cursor?this.continuation:'';this.cursor=cursor;this.text='';this.more=false;this.continuation=carry||'';}
+  request(){return {run:this.run,source:this.source,cursor:JSON.stringify(this.cursor),continuation:this.continuation};}
+  accept(result){
+    if(result.reset || (this.run && this.run!==result.run)){this.restart();this.source=result.source||'';}
+    this.run=result.run;this.cursor=result.cursor;this.more=result.more;
+    this.continuation=result.continuation||'';
+    this.text=(this.text+(result.output||'')).slice(-65536);
+  }
+}
+function dashboardLoading(document,t) {
+  const make=(tag,cls,text)=>{const node=document.createElement(tag);node.className=cls;if(text)node.textContent=t(text);return node;};
+  const root=make('section','dashboard-loading');root.setAttribute('aria-busy','true');
+  const status=make('div','loading-status','Loading your hive…');status.setAttribute('role','status');
+  const emblem=make('span','loading-honeycomb');emblem.setAttribute('aria-hidden','true');status.append(emblem);root.append(status);
+  const placeholders=make('div','loading-placeholders');placeholders.setAttribute('aria-hidden','true');
+  const metrics=make('div','loading-metrics');
+  for(let i=0;i<7;i++){const tile=make('div','loading-metric');tile.append(make('span','loading-block'),make('span','loading-line'));metrics.append(tile);}
+  const columns=make('div','loading-columns'),main=make('div','loading-panel'),side=make('div','loading-sidebar');
+  main.append(make('span','loading-line loading-title'));
+  for(let i=0;i<5;i++)main.append(make('div','loading-row'));
+  for(let i=0;i<3;i++){const panel=make('div','loading-panel');panel.append(make('span','loading-line loading-title'),make('div','loading-row'));side.append(panel);}
+  columns.append(main,side);placeholders.append(metrics,columns);root.append(placeholders);return root;
+}
 function orchestrationFor(row,hives=[]) {
   if(row.kind!=='orch')return null;
   const info=row.orch||hives.find(plan=>plan.apiary===(row.apiary||row.project)&&plan.plan_path===row.plan_path)?.orch;
@@ -5,33 +55,73 @@ function orchestrationFor(row,hives=[]) {
   const chain=info.chain||[],index=chain.findIndex(([,state])=>state==='running'||state==='red');
   return {...info,chain,n:info.n??(index>=0?index+1:chain.filter(([,state])=>state==='done').length),m:info.m??chain.length};
 }
-
 /* Browser UI, using only the platform DOM and the authenticated engine API. */
-
 'use strict';
-
 const copy = value => JSON.parse(JSON.stringify(value));
-
 function isPackagePlaceholder(row) {
   return row.kind==='bee' && !row.agent && !row.embedded && (!row.name || row.name==='–');
 }
-
 function visibleHiveRows(rows) {
   return rows.filter(row=>!isPackagePlaceholder(row));
 }
-
+function planProcessGroups(plans,rows) {
+  const visible=visibleHiveRows(rows);
+  return plans.map(plan=>{
+    const project=plan.apiary||plan.project;
+    const processes=visible.filter(row=>(row.apiary||row.project)===project&&row.plan_path===plan.plan_path);
+    return {key:JSON.stringify([project,plan.plan_path]),plan,processes,
+      summary:{...plan,orch:processes.some(row=>row.kind==='orch')?null:plan.orch}};
+  });
+}
+function pendingQueue(data,plans=[]) {
+  const key=row=>JSON.stringify([row.project||row.apiary,(row.plan_path||'').replaceAll('\\','/')]);
+  const active=new Set(plans.map(key)),seen=new Set();
+  const items=(data.items||[]).filter(row=>{
+    const status=String(row.status||'').toUpperCase(),id=key(row);
+    if(!['DRAFT','SENT','QUEUED'].includes(status)||active.has(id)||seen.has(id))return false;
+    seen.add(id);return true;
+  }).map(row=>({...row,status:String(row.status).toUpperCase()}));
+  return {items,queued:items.length,drafts:items.filter(row=>row.status==='DRAFT').length,pending:items.filter(row=>row.status!=='DRAFT').length};
+}
+function hiveTree(plans,rows,projects=[]) {
+  const result=[],groups=planProcessGroups(plans,rows);
+  const names=[...new Set([...projects.map(p=>p.name),...plans.map(p=>p.apiary||p.project)])].filter(Boolean);
+  for(const project of names){
+    const projectKey=JSON.stringify(['project',project]);
+    result.push({key:projectKey,parent:null,type:'project',depth:0,row:{name:project,apiary:project}});
+    for(const group of groups.filter(g=>(g.plan.apiary||g.plan.project)===project)){
+      const planKey=JSON.stringify(['plan',project,group.plan.plan_path]);
+      result.push({key:planKey,parent:projectKey,type:'plan',depth:1,row:group.summary});
+      const processes=group.processes,keys=new Map(processes.map((r,i)=>[r,JSON.stringify(['process',project,group.plan.plan_path,r.agent||r.stop_agent||r.name,r.kind,r.task||''])]));
+      const parents=new Map();
+      for(const row of processes){
+        const explicit=row.parent_agent||row.parent;
+        const parent=explicit?processes.find(p=>p!==row&&(p.agent===explicit||p.name===explicit)):
+          !['queen','orch'].includes(row.kind)?processes.find(p=>p.kind===(row.kind==='fix'?'orch':'queen')):null;
+        parents.set(row,parent);
+      }
+      const visited=new Set();
+      function append(row,parent,depth){
+        if(visited.has(row))return;visited.add(row);
+        result.push({key:keys.get(row),parent,type:row.kind,depth,row});
+        for(const child of processes.filter(p=>parents.get(p)===row))append(child,keys.get(row),depth+1);
+      }
+      for(const row of processes.filter(p=>!parents.get(p)))append(row,planKey,2);
+      for(const row of processes)if(!visited.has(row))append(row,planKey,2);
+    }
+  }
+  return result;
+}
 function dashboardPlanHeight({available,planChrome,gap,header,rows,hiveHeight}) {
   const minimum=header+rows.slice(0,3).reduce((sum,height)=>sum+height,0)+1;
   const full=header+rows.reduce((sum,height)=>sum+height,0)+1;
   return Math.ceil(Math.max(minimum,Math.min(full,available-planChrome-gap-hiveHeight)));
 }
-
 function hiveCounts(rows) {
   return {queens:rows.filter(row=>row.kind==='queen').length,
     agents:rows.filter(row=>!['queen','orch'].includes(row.kind)&&!isPackagePlaceholder(row)).length,
     packages:rows.filter(isPackagePlaceholder).length};
 }
-
 function providerCli(provider,presets) {
   return ['loginCommand','loginFiles','profileEnv','outputFormat'].some(key=>Object.hasOwn(provider,key))?'custom':Object.keys(presets).find(key=>presets[key].protocol===provider.protocol)||'custom';
 }
@@ -56,19 +146,12 @@ function switchProviderAccess(provider,access,stash,presets,offered) {
   provider.limit={...(typeof provider.limit==='object'?provider.limit:{}),source:access==='subscription'&&['claude','codex'].includes(key)?key:'none'};
   for(const [name,entry] of Object.entries(provider.classes||{})){delete entry.model;delete entry.customModel;Object.assign(entry,copy(selectedModels[name]||{}));}
 }
-
 function setValue(object, path, value) {
-
   let target = object;
-
   for (const key of path.slice(0, -1)) target = target[key];
-
   target[path[path.length - 1]] = value;
-
 }
-
 function safeLinks(links) { return links.filter(link => /^https?:\/\//i.test(link)); }
-
 function effectiveCapabilities(provider) {
   const aliases={images:'Image generation',blender:'3D modelling',build:'Build'};
   const selected=(provider.capabilities || []).map(value=>{const name=String(value).trim();return aliases[name.toLowerCase()] || name;});
@@ -84,273 +167,307 @@ function capabilityRows(provider, names=[]) {
   return [...new Set([...names,...selected,...Object.keys(thresholds)])].map(name=>({name,enabled:selected.includes(name),threshold:thresholds[name] ?? 100}));
 }
 function orchestratorDisabled(action, label) {
-
   if(action==='start')return label!=='STOPPED';
-
   if(action==='stop-gracefully')return label==='STOPPED'||label==='STOPPING';
-
   return false;
-
 }
-
 function toolsFromArgs(args) {
-
   const index=args.indexOf('--allowedTools');if(index<0 || index+1>=args.length)return [];
-
   const result=[];let depth=0,current='';
-
   for(const char of args[index+1]){if(char==='(')depth++;if(char===')')depth=Math.max(0,depth-1);if(char===','&&depth===0){result.push(current.trim());current='';}else current+=char;}
-
   result.push(current.trim());return result.filter(Boolean);
-
 }
-
 function withTools(args, tools) {
-
   const out=[...args],index=out.indexOf('--allowedTools');
-
   if(index>=0 && index+1<out.length)out.splice(index,2);
-
   if(tools.length)out.splice(index<0?out.length:index,0,'--allowedTools',tools.join(','));
-
   return out;
-
 }
-
 function planActions(row) {
-
-  if (row.status === 'DONE') return [];
-
+  if (row.status === 'DONE' || row.missing || row.recovery_error) return [];
   const out = [];
-
   if (row.status === 'PAUSED' && row.stopped) out.push('resume');
-
   if (['DRAFT', 'CANCELLED'].includes(row.status)) out.push('start');
-
   if (['SENT','PREPARING','QUEUED','RUNNING','WAITING','REVIEW'].includes(row.status)) out.push('stop-gracefully');
-
   if (row.has_hive && !row.stopped) out.push('force-stop');
-
   if (row.status === 'DRAFT' || row.stopped) out.push('cancel');
-
   if (row.status === 'CANCELLED' || row.stopped) out.push('back-to-draft');
-
   return out;
-
 }
-
+async function resolvePlanActions(row, request) {
+  if (/^[A-Z]+$/.test(row.status||'')) return planActions(row);
+  const plans=await request('plans');
+  const match=plans.find(plan=>(plan.apiary||plan.project)===(row.apiary||row.project) && plan.plan_path===row.plan_path);
+  return match?planActions(match):[];
+}
 function dashboardMetrics(tiles,format) {
-
   return [
-
     {key:'apiaries',label:'PROJECTS',value:String(tiles.apiaries??0),note:'active',icon:'t_apiaries'},
-
     {key:'hives',label:'PLANS',value:String(tiles.hives??0),note:'active',icon:'t_hives'},
-
     {key:'queens',label:'QUEENS',value:String(tiles.queens??0),note:'online',icon:'t_queens'},
-
     {key:'orchestrators',label:'Orchestrator',value:String(tiles.orchestrators??0),note:'active',icon:'icon_system'},
-
     {key:'bees',label:'BUSY AGENTS',value:(tiles.bees??0)+' / '+(tiles.bee_capacity??0),note:'active',icon:'t_bees'},
-
     {key:'io',label:'TOTAL I/O',value:format(tiles.tokens_in??0)+' / '+format(tiles.tokens_out??0),note:'in / out (today)',icon:'t_io'},
-
     {key:'start',label:'START CONTEXT',value:tiles.start_ctx?.saving==null?'no benchmark':tiles.start_ctx.saving+'%',note:'Start context per agent start',icon:'t_start'}
-
   ];
-
 }
-
 function dashboardRows(state, filter) {
-
   const hives=state.hives||[],bees=state.bees||[];
-
   if(!filter)return {hives,bees};
-
   const sameProject=row=>(row.apiary||row.project)===filter.project;
-
   const matches=row=>sameProject(row) && (filter.type==='project' || (row.plan_path||row.hive||row.name)===filter.plan);
-
   return {hives:hives.filter(matches),bees:bees.filter(row=>matches(row) && (filter.type!=='agent' || ['queen','orch'].includes(row.kind) || (filter.agent?row.agent===filter.agent:row.name===filter.name && row.task===filter.task)))};
-
 }
-
 class RenderGate {
-
   constructor(render) { this.draw=render; this.pending=new Map(); }
-
   begin(node) {
-
     const key=node.textContent; let group=this.pending.get(key);
-
     if(!group){group={count:0,nodes:new Map()};this.pending.set(key,group);}
-
     group.count++; this.prepare(node);
-
   }
-
   prepare(node) {
-
     const group=this.pending.get(node.textContent);
-
     if(group){if(!group.nodes.has(node))group.nodes.set(node,node.disabled);node.disabled=true;node.setAttribute('aria-busy','true');}
-
   }
-
   end(node) {
-
     const group=this.pending.get(node.textContent); if(!group || --group.count)return;
-
     this.pending.delete(node.textContent);
-
     for(const [item,disabled] of group.nodes){item.disabled=disabled;item.removeAttribute('aria-busy');}
-
   }
-
   render() { this.draw(); }
-
 }
-
+// Cache only the selected question's expanded evidence, invalidated by changed records.
+class QuestionDetails {
+  constructor(request){this.request=request;this.entries=new Map();}
+  get(question){const entry=this.entries.get(question.id);return entry?.signature===JSON.stringify(question)?entry:null;}
+  load(question){
+    let entry=this.get(question);if(entry)return entry.promise;
+    entry={signature:JSON.stringify(question)};this.entries.set(question.id,entry);
+    if(this.entries.size>32)this.entries.delete(this.entries.keys().next().value);
+    entry.promise=this.request('questions/detail?id='+encodeURIComponent(question.id)).then(value=>{entry.value=value;return value;},error=>{entry.error=error;throw error;});
+    return entry.promise;
+  }
+  retry(question){this.entries.delete(question.id);return this.load(question);}
+}
+function releaseCardState(row,releases,job){
+  const selected=job && (job.source_tag||job.result?.source_tag)===row.tag;
+  if(selected){
+    if(job.publication?.state==='published'||job.result?.files)return {state:'promoted',url:job.publication?.url};
+    if(job.error||job.publication?.state==='failed')return {state:'failed',error:job.error||job.publication.error};
+    if(job.running||job.result?.pending)return {state:'publishing',error:job.verificationError};
+  }
+  const full=releases.find(r=>r.tag===row.full_tag&&!r.prerelease&&r.commit===row.commit);
+  return {state:full?'promoted':row.prerelease?'prerelease':'stable',url:full?.url};
+}
+function releaseJobStatus(job){
+  if(job.error)return {text:job.error,error:true,busy:false};
+  if(job.running)return {text:job.progress||'Publishing release...',error:false,busy:true};
+  return {text:job.result?.message||'Release publication finished.',error:false,busy:false};
+}
+async function startReleasePromotion(client,project,row,onProgress,warning){
+  if(!await client.confirm(warning||'Publish as full release '+row.full_tag+'?'))return null;
+  const pending={key:'release-promotion:'+project,source_tag:row.tag,running:true,progress:'Starting release publication...',started:Date.now()/1000};
+  onProgress(pending);
+  try{
+    const job=await client.action('releases/promote',{project,tag:row.tag,confirmed:true});
+    if(!job)throw Error('Publication request was not accepted.');
+    job.source_tag=row.tag;onProgress(job);return job;
+  }catch(error){onProgress({...pending,running:false,error:error.message});return null;}
+}
+async function startUpdateInstall(client,version,onProgress,warning){
+  if(!await client.confirm(warning))return null;
+  onProgress({installing:{version,starting:true}});
+  try{
+    const result=await client.action('updates/install',{version,confirmed:true});
+    if(!result)throw Error('Update request was not accepted.');
+    onProgress({installing:{version}});return result;
+  }catch(error){onProgress({installing:null,failed:version,installError:error.message});return null;}
+}
 class Client {
-
   constructor(options = {}) {
-
     Object.assign(this, {csrf:'', fetch:(...args)=>fetch(...args), confirm:()=>false, notice:()=>{}, onState:()=>{}, onError:()=>{}, project:'', loading:false, refreshWanted:false}, options);
-
     this.pending=new Map();
-
   }
-
   async request(action, data) {
-
     const options = {credentials:'same-origin', headers:{'Content-Type':'application/json','X-CSRF-Token':this.csrf}};
-
     if (data !== undefined) { options.method='POST'; options.body=JSON.stringify(data); }
-
     const response = await this.fetch('/api/' + action, options);
-
     if (response.status === 401) this.onUnauthorized?.();
-
     const result = await response.json();
-
     if (!response.ok || result?.ok === false) throw new Error(result.error || result.message || 'Request failed');
-
     return result;
-
   }
-
   async action(action, data={}, warning='') {
-
     const key=JSON.stringify([action,data]);
-
     if(this.pending.has(key))return null;
-
     this.pending.set(key,true);
-
     try {
-
       if (warning && !await this.confirm(warning)) {this.notice('Cancelled');return null;}
-
       this.notice('Working…');
-
       const result = await this.request(action, {...data, ...(warning ? {confirmed:true} : {})});
-
       this.notice(result?.message || 'Done');
-
       return result;
-
     } catch (error) { this.notice(error.message, true); throw error; }
-
     finally {this.pending.delete(key);}
-
   }
-
-  async refresh() {
-
-    if (this.loading) { this.refreshWanted=true; return; }
-
-    this.loading=true;
-
-    const project = this.project;
-
+  async plansAction(action, warning) {
+    const lock='plans/batch';
+    if(this.pending.has(lock))return null;
+    this.pending.set(lock,true);
     try {
-
-      const value=await this.request('state' + (project ? '?project='+encodeURIComponent(project) : ''));
-
-      if (project === this.project) { this.state=value; this.onState(value); }
-
-      else this.refreshWanted=true;
-
-    } catch(error) { this.onError(error); }
-
-    finally {
-
-      this.loading=false;
-
-      if (this.refreshWanted) { this.refreshWanted=false; void this.refresh(); }
-
-    }
-
+      const selected=await this.request('plans/control-preview',{operation:action});
+      if(!selected.length)return {count:0};
+      const names=selected.map(row=>row.project+' / '+row.plan).join('\n');
+      if(!await this.confirm(warning(selected.length)+'\n\n'+names))return null;
+      return await this.request('plans/control',{operation:action,targets:selected,confirmed:true});
+    } finally {this.pending.delete(lock);}
   }
-
+  async refresh() {
+    if (this.loading) { this.refreshWanted=true; return; }
+    this.loading=true;
+    const project = this.project;
+    try {
+      const value=await this.request('state' + (project ? '?project='+encodeURIComponent(project) : ''));
+      if (project === this.project) {
+        this.state=value; this.onState(value);
+        if(value.web_listener_error && value.web_listener_error!==this.listenerError)this.notice(value.web_listener_error,true);
+        this.listenerError=value.web_listener_error || '';
+      }
+      else this.refreshWanted=true;
+    } catch(error) { this.onError(error); }
+    finally {
+      this.loading=false;
+      if (this.refreshWanted) { this.refreshWanted=false; void this.refresh(); }
+    }
+  }
+}
+function credentialStatus(provider) {
+  if(provider.error||provider.status_error)return {label:'Check access',tone:'error',icon:'!'};
+  if(['device','bearer','token','pat','existing access'].includes(provider.method))return {label:'Access present',tone:'ok',icon:'\u2713'};
+  return {label:'Not configured',tone:'neutral',icon:'\u2014'};
+}
+function loginStatus(status) {
+  if(!status||typeof status.logged_in!=='boolean')return {label:'Login status unknown',tone:'neutral',icon:'?'};
+  return status.logged_in?{label:'Login present',tone:'ok',icon:'\u2713'}:{label:'Login missing',tone:'warn',icon:'!'};
+}
+async function copyOutput(target, document, navigator) {
+  const text=target.tagName==='TEXTAREA'?target.value:(target.innerText??target.textContent);
+  if(navigator?.clipboard?.writeText){try{await navigator.clipboard.writeText(text);return;}catch(_error){/* HTTP or denied clipboard: use the selection fallback. */}}
+  const active=document.activeElement, selection=document.getSelection?.();
+  const ranges=selection?Array.from({length:selection.rangeCount},(_,i)=>selection.getRangeAt(i).cloneRange()):[];
+  const start=active?.selectionStart,end=active?.selectionEnd;
+  const temporary=document.createElement('textarea');temporary.value=text;
+  temporary.style.cssText='position:fixed;left:-10000px;top:0';temporary.setAttribute('aria-hidden','true');
+  // A modal dialog makes body siblings inert, so keep the fallback inside it.
+  const host=target.closest?.('dialog[open]') || document.body;host.append(temporary);
+  try{temporary.select();if(!document.execCommand('copy'))throw Error('Copy failed. Select the text and copy it manually.');}
+  finally{temporary.remove();active?.focus?.({preventScroll:true});if(typeof start==='number')active.setSelectionRange?.(start,end);if(selection){selection.removeAllRanges();for(const range of ranges)selection.addRange(range);}}
+}
+function installCopyButtons(document,navigator,t,notice) {
+  const decorated=new WeakSet();
+  function decorate(root){
+    const targets=[...(root.matches?.('pre,textarea')?[root]:[]),...(root.querySelectorAll?.('pre,textarea')||[])];
+    for(const target of targets){
+      if(decorated.has(target)||!target.isConnected||target.getAttribute('aria-hidden')==='true'||target.getAttribute('data-copy')==='off')continue;
+      decorated.add(target);
+      const bar=document.createElement('div');bar.className='copy-tools';
+      const button=document.createElement('button');button.type='button';button.className='copy-output';
+      const icon=document.createElement('span');icon.className='copy-icon';icon.setAttribute('aria-hidden','true');
+      const label=document.createElement('span');label.textContent=t('Copy');
+      button.setAttribute('aria-label',t('Copy text'));button.title=t('Copy text');button.append(icon,label);bar.append(button);
+      const status=document.createElement('span');status.className='copy-status';status.setAttribute('role','status');bar.append(status);
+      button.onclick=async event=>{event.preventDefault();event.stopPropagation();button.disabled=true;try{await copyOutput(target,document,navigator);status.textContent=t('Copied');}catch(error){status.textContent=t('Copy failed');notice(t(error.message),true);}finally{button.disabled=false;}setTimeout(()=>{status.textContent='';},2500);};
+      target.parentNode.insertBefore(bar,target.tagName==='TEXTAREA'?target.nextSibling:target);
+    }
+  }
+  decorate(document.body);
+  const observer=new MutationObserver(records=>{for(const record of records)for(const node of record.addedNodes)if(node.nodeType===1)decorate(node);});
+  observer.observe(document.body,{childList:true,subtree:true});return observer;
+}
+function settingsCategory(scope,key) {
+  const groups=scope==='Projects'?{
+    'Basics':['name','colour','priority'],
+    'Agent rules':['ownerTopics'],
+    'Git and cleanup':['integrationBranch','worktreeLocation','worktreePrefix','deleteFinishedWorktrees','deleteIntegratedBranches'],
+    'Workflow and checks':['nextVersion','releasePostfix','slowTestSeconds'],
+  }:{
+    'Resources':['slots','buildJobs','ramReserveMb','minFreeRamGB','maxConcurrentCompileChecks'],
+    'Agent control':['queenClass','diagnosisClass','beesPerQueen','escalateAfter','roundMinutes','hives','excludedProviders','providerRecheckMinutes'],
+    'Web access':['web'],
+    'Data and retention':['retention','exportDir','slowTestSeconds'],
+    'Updates':['update'],
+    'Basics':['language','owner'],
+  };
+  return Object.keys(groups).find(group=>groups[group].includes(key))||'Advanced';
+}
+function workflowSummary(data, t=x=>x) {
+  const parts=[t('Merge')+': '+t(data.mergeMode==='git'?'Git provider':'Local')];
+  for(const [key,title] of [['check','Check'],['build','Build']])if(data[key+'Enabled'])parts.push(t(title)+': '+t(data[key+'Mode']==='git'?'Git provider':'Local'));
+  parts.push(t('Push')+': '+(data.integrationBranch||t('default branch')));
+  for(const [key,title] of [['deploy','Deploy'],['release','Release']])if(data[key+'Enabled'])parts.push(t(title)+': '+t(data[key+'Mode']==='git'?'Git provider':'Local'));
+  return parts.join(' → ');
 }
 
 function mount(document, bootstrap) {
-
   const $ = id => document.getElementById(id);
-
   const t = text => bootstrap.translations[text] || text;
-
   const viewLabels = {apiaries:'Projects',hives:'Plans',queens:'QUEENS',orchestrators:'Orchestrator',bees:'Agents',tin:'Tokens in',tout:'Tokens out',ctx:'CONTEXT',
-
     ctx_limit:'Context limit',start_ctx:'START CONTEXT',tokens_in:'TOTAL IN',tokens_out:'TOTAL OUT',bee_capacity:'Agent slots',
-
     apiary:'PROJECT',hive:'PLAN',task:'TASK',model:'MODEL',status:'STATUS',runtime:'RUNTIME',queen:'QUEEN',bees_running:'BUSY AGENTS',
-
     progress:'PROGRESS',done:'Done',implemented:'Implemented',rejected:'Rejected',waiting:'Waiting',total:'Total',name:'Name',
-
     started:'Started',waiting_for:'Waiting for',error:'Error'};
-
   const pretty = key => t(bootstrap.labels[key] || viewLabels[key] || key.replace(/([a-z])([A-Z])/g,'$1 $2').replace(/_/g,' '));
-
   const el = (tag, text, cls) => {const node=document.createElement(tag); if(text!==undefined) node.textContent=String(text); if(cls)node.className=cls; return node;};
-
+  const statusBadge = status => {
+    const badge=el('span',undefined,'access-status access-'+status.tone);
+    const icon=el('span',status.icon);icon.setAttribute('aria-hidden','true');badge.append(icon,el('span',t(status.label)));return badge;
+  };
   const button = (text, action) => {const node=el('button',t(text)); node.type='button'; renderGate.prepare(node); node.onclick=()=>runButton(node,action); return node;};
-
   async function runButton(node, action) {
-
     renderGate.begin(node);
-
     try { await action(); } catch(error) {client.notice(error.message,true);}
-
     finally {renderGate.end(node);if(client.state)renderStateNow(client.state);}
-
   }
-
   const confirmation=el('dialog',undefined,'confirmation-dialog');confirmation.id='confirmation-dialog';confirmation.setAttribute('aria-labelledby','confirmation-title');confirmation.setAttribute('aria-describedby','confirmation-message');document.body.append(confirmation);
-
   function requestConfirm(message){
-
     if(confirmation.open)return Promise.resolve(false);
-
     const title=el('h2',t('Confirm action'));title.id='confirmation-title';
-
     const text=el('p',message);text.id='confirmation-message';
-
     const footer=el('div',undefined,'confirmation-actions');
-
     const cancel=el('button',t('Cancel')),approve=el('button',t('Confirm'));
-
     cancel.type=approve.type='button';approve.className='confirm-primary';
-
-    cancel.onclick=()=>confirmation.close('cancel');approve.onclick=()=>confirmation.close('confirm');footer.append(cancel,approve);
-
+    footer.append(cancel,approve);
     confirmation.replaceChildren(title,text,footer);confirmation.returnValue='cancel';
-
-    return new Promise(resolve=>{confirmation.addEventListener('close',()=>resolve(confirmation.returnValue==='confirm'),{once:true});confirmation.showModal();cancel.focus();});
-
+    return new Promise(resolve=>{
+      let settled=false;
+      const finish=accepted=>{
+        if(settled)return;settled=true;
+        confirmation.removeEventListener('close',closed);confirmation.removeEventListener('cancel',cancelled);
+        if(confirmation.open)confirmation.close(accepted?'confirm':'cancel');
+        resolve(accepted);
+      };
+      const closed=()=>{if(!confirmation.open)finish(confirmation.returnValue==='confirm');};
+      const cancelled=event=>{event.preventDefault();finish(false);};
+      // Resolve button actions immediately, even when rendering delays the close event.
+      cancel.onclick=()=>finish(false);approve.onclick=()=>finish(true);
+      confirmation.addEventListener('close',closed);confirmation.addEventListener('cancel',cancelled);
+      confirmation.showModal();cancel.focus();
+    });
   }
-
+  function requestInput(message){
+    const dialog=el('dialog',undefined,'confirmation-dialog'),form=el('form');
+    const label=el('label',message),input=el('input');input.type='text';input.id='setting-input';label.htmlFor=input.id;
+    dialog.setAttribute('aria-label',message);
+    const footer=el('div',undefined,'confirmation-actions'),cancel=el('button',t('Cancel')),save=el('button',t('Save'));
+    cancel.type='button';save.type='submit';save.className='confirm-primary';footer.append(cancel,save);
+    form.append(label,input,footer);dialog.append(form);document.body.append(dialog);
+    return new Promise(resolve=>{
+      let settled=false;const finish=value=>{if(settled)return;settled=true;dialog.close();dialog.remove();resolve(value);};
+      form.onsubmit=event=>{event.preventDefault();finish(input.value);};cancel.onclick=()=>finish(null);
+      dialog.addEventListener('cancel',event=>{event.preventDefault();finish(null);});
+      dialog.addEventListener('close',()=>finish(null));dialog.showModal();input.focus();
+    });
+  }
   function animateHeader(){
     const canvas=$('honeycomb');if(!canvas)return;
     const context=canvas.getContext('2d');if(!context)return;
@@ -395,139 +512,99 @@ function mount(document, bootstrap) {
     new ResizeObserver(resize).observe(canvas);document.addEventListener('visibilitychange',update);resize();update();
   }
   animateHeader();
-
   const client=new Client({csrf:bootstrap.csrf, confirm:text=>requestConfirm(t(text)), notice:(text,bad=false)=>{ $('notice').textContent=t(text);$('notice').className=bad?'bad':'';},
-
     onUnauthorized:()=>{location.href='/login';}, onError:error=>client.notice(error.message,true),onState:renderState});
-
   const renderGate=new RenderGate(()=>renderStateNow(client.state));
-
+  let updateRevision=0,updateSubmitting=false;
   let tab='Dashboard', editor=null, plans=[], questions=[], providerStates=[], updateState={}, overlay=null;
-
+  const releasePromotions=new Map();
+  const questionDrafts=new Map();
+  const questionDetails=new QuestionDetails(route=>client.request(route));
+  const planFilters={search:'',project:'',status:''};
+  let questionsLoaded=false,plansLoaded=false;
+  let questionFilter='open', questionFocus=null, questionNavigation=false, selectedThread=null, conversationMobile=false, planDraft=null;
+  let releaseProject='', releaseData=null, releaseError='', releaseRequest=0;
   let planLoading=false, questionLoading=false, providerLoading=false, updateLoading=false;
-
   let lastAutomaticCheck=0, automaticChecking=false;
-
   let dashboardFilter=null;
-
+  const collapsedHives=new Set();
   let generation=0, logCleared=0, logFilter='', showNoise=false, logFollow=true, selectedPlan='', selectedAgent='';
-
   const liveRuns=new Map(), loginRuns=new Map(), jobs=new Map();
-
+  let ownerHistory=null;
   const view=$('app');
-
   $('detail').addEventListener('close',()=>{overlay=null;liveRuns.delete('detail');$('detail').classList.remove('entity-dialog');});
-
   const actions={start:'Start','stop-gracefully':'Stop gracefully','force-stop':'Force stop',resume:'Resume',cancel:'Cancel plan','back-to-draft':'Back to draft'};
-
   function detail(title, value) {
-
     liveRuns.delete('detail');$('detail').classList.remove('entity-dialog');overlay={title,value}; renderDetail(); if (!$('detail').open) $('detail').showModal();
-
   }
-
   const tokens = value => value==null?'–':new Intl.NumberFormat(bootstrap.language==='German'?'de':'en',{notation:'compact',maximumFractionDigits:1}).format(value);
-
   function meter(value, max=100, label='', colour='gold') {
-
     const node=el('progress',undefined,colour);node.max=Math.max(1,max);node.value=Math.max(0,Number(value)||0);node.setAttribute('aria-label',label);return node;
-
   }
-
   function tileContent(key, value) {
-
     const rows=key==='orchestrators'?(client.state?.bees||[]).filter(row=>row.kind==='orch'):Array.isArray(value)?value:value?.rows || [];
-
     const box=el('div',undefined,'tile-content');
-
     if(!rows.length){box.append(el('p',t(key==='start'?'no benchmark yet - run it in the settings':'none'),'dim'));return box;}
-
     if(key==='start'){
-
       box.append(el('p',t('Start context per agent start')));
-
       const scale=Math.max(1,...rows.flatMap(row=>[Number(row.own)||0,Number(row.hq)||0]));
-
       const groups={1:'Per provider (average over its Projects)',2:'Per Project (average over the providers measured there)',3:'Per provider within each Project'};
-
       let block,group;
-
       for(const row of rows){
-
         if(row.block!==block){block=row.block;group=null;box.append(el('h3',t(groups[block]||'START CONTEXT')));}
-
         if(row.group && row.group!==group){group=row.group;box.append(el('h4',group));}
-
         const comparison=el('div',undefined,'context-comparison');comparison.append(el('strong',row.name));
-
         if(row.missing){comparison.append(el('span',t('no benchmark yet - run it in the settings'),'dim'));}
-
         else{
-
           for(const [label,key,colour] of [['WITHOUT HaiveQueen','own','gold'],['WITH HaiveQueen','hq','cyan']]){
-
             const line=el('div',undefined,'comparison-bar');line.append(el('span',t(label)),meter(row[key],scale,t(label),colour),el('span',tokens(row[key])));comparison.append(line);
-
           }
-
           comparison.append(el('span',t('Saving')+' '+(row.saving>0?'+':'')+row.saving+'%','cyan'));
-
           if(row.date)comparison.append(el('small',row.date));
-
         }
-
         box.append(comparison);
-
       }
-
       return box;
-
     }
-
     const headings={apiaries:['Project','Tokens in','Tokens out'],hives:['Plan','Project','Tokens in','Tokens out','per finished package'],queens:['Queen','Plan','Project','Tokens in','Tokens out'],bees:['Agent','Plan','Project','Tokens in','Tokens out'],io:['MODEL','Tokens in','Tokens out','fresh in','cached in']};
-
     const columns={apiaries:['name','tin','tout'],hives:['name','apiary','tin','tout','per_package'],queens:['name','hive','apiary','tin','tout'],bees:['name','hive','apiary','tin','tout'],io:['model','tin','tout','fresh','cached']};
-
     const keys=columns[key];
-
     if(!keys)return valueView(rows);
-
     const display=rows.map(row=>Object.fromEntries(keys.map((field,index)=>[t(headings[key][index]),field==='per_package'?(row[field]?.map(tokens).join(' / ')||'–'):['tin','tout','fresh','cached'].includes(field)?tokens(row[field]):row[field]])));
-
     box.append(table(display));return box;
-
   }
-
   const tilePreview=el('aside',undefined,'tile-preview');tilePreview.hidden=true;tilePreview.id='tile-preview';tilePreview.setAttribute('role','tooltip');document.body.append(tilePreview);
-
-  let previewTimer;
-
+  let previewTimer, scrollingPreview=false;
+  function hideTilePreview(){clearTimeout(previewTimer);tilePreview.hidden=true;}
+  // A stationary pointer must not activate help as content scrolls beneath it.
+  function retainHelp(node){if(node.title){node.dataset.hoverHelp=node.title;node.removeAttribute('title');}}
+  function scrollingHelp(){scrollingPreview=true;hideTilePreview();for(const node of document.querySelectorAll('[title]'))retainHelp(node);}
+  document.addEventListener('scroll',scrollingHelp,{capture:true,passive:true});
+  document.addEventListener('wheel',scrollingHelp,{capture:true,passive:true});
+  document.addEventListener('touchmove',scrollingHelp,{capture:true,passive:true});
+  document.addEventListener('pointermove',()=>{scrollingPreview=false;},{passive:true});
+  document.addEventListener('pointerover',event=>{
+    const node=event.target.closest?.('[title],[data-hover-help]');if(!node)return;
+    retainHelp(node);if(scrollingPreview||event.pointerType!=='mouse')return;
+    clearTimeout(previewTimer);previewTimer=setTimeout(()=>{
+      if(scrollingPreview||!node.isConnected)return;
+      tilePreview.replaceChildren(el('p',node.dataset.hoverHelp));tilePreview.hidden=false;
+      const r=node.getBoundingClientRect();tilePreview.style.left=Math.max(8,Math.min(r.left,window.innerWidth-tilePreview.offsetWidth-8))+'px';tilePreview.style.top=Math.max(8,Math.min(r.bottom+6,window.innerHeight-tilePreview.offsetHeight-8))+'px';
+    },600);
+  });
+  document.addEventListener('pointerout',event=>{if(event.target.closest?.('[data-hover-help]'))hideTilePreview();});
   function closeTilePreview(){clearTimeout(previewTimer);previewTimer=setTimeout(()=>{tilePreview.hidden=true;},180);}
-
   tilePreview.onpointerenter=()=>clearTimeout(previewTimer);tilePreview.onpointerleave=closeTilePreview;
-
-  document.addEventListener('keydown',event=>{if(event.key==='Escape')tilePreview.hidden=true;});
-
-  function previewTile(node,title,key){
-
-    clearTimeout(previewTimer);tilePreview.replaceChildren(el('h2',title),tileContent(key,client.state?.overlays?.[key]));
-
-    const rect=node.getBoundingClientRect();tilePreview.style.top=Math.min(rect.bottom+6,window.innerHeight-180)+'px';tilePreview.style.left=Math.max(8,Math.min(rect.left,window.innerWidth-760))+'px';tilePreview.hidden=false;
-
-  }
-
+  document.addEventListener('keydown',event=>{if(event.key==='Escape')hideTilePreview();});
   function showTile(title,key) {
-
-    tilePreview.hidden=true;overlay={title,tile:key,value:client.state?.overlays?.[key]};renderDetail();if(!$('detail').open)$('detail').showModal();
-
+    hideTilePreview();overlay={title,tile:key,value:client.state?.overlays?.[key]};renderDetail();if(!$('detail').open)$('detail').showModal();
   }
-
   function limitHelp(node,title,text){
     if(!text)return node;
     node.classList.add('limit-help');node.tabIndex=0;node.setAttribute('role','button');node.setAttribute('aria-label',title);node.dataset.help=text;
     const show=()=>{clearTimeout(previewTimer);tilePreview.replaceChildren(el('h2',title),el('p',text));tilePreview.hidden=false;const r=node.getBoundingClientRect();tilePreview.style.left=Math.max(8,Math.min(r.left,window.innerWidth-tilePreview.offsetWidth-8))+'px';tilePreview.style.top=Math.max(8,Math.min(r.bottom+6,window.innerHeight-tilePreview.offsetHeight-8))+'px';};
-    node.onpointerenter=show;node.onpointerleave=closeTilePreview;node.onfocus=show;node.onblur=closeTilePreview;
-    node.onclick=()=>{tilePreview.hidden=true;detail(title,text);};node.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();node.click();}};
+    node.onpointerenter=event=>{if(event.pointerType==='mouse'&&!scrollingPreview){clearTimeout(previewTimer);previewTimer=setTimeout(show,600);}};node.onpointerleave=closeTilePreview;node.onfocus=()=>{if(!scrollingPreview)show();};node.onblur=closeTilePreview;
+    node.onclick=()=>{hideTilePreview();detail(title,text);};node.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();node.click();}};
     return node;
   }
   let stepLogTimer;
@@ -544,31 +621,46 @@ function mount(document, bootstrap) {
     const sources=el('div',undefined,'step-log-sources'),runInfo=el('p',undefined,'step-log-run'),fileInfo=el('p',undefined,'dim');
     const sourceSelect=el('select');sourceSelect.setAttribute('aria-label','Log source');
     sources.append(el('label','Log source'),sourceSelect);body.insertBefore(runInfo,panel);panel.insertBefore(sources,output);panel.insertBefore(fileInfo,output);
-    let latest=null, selected=null;
+    let latest=null, selected='',following=true,loading=false,revision=0,autoSource=true;
+    const pager=new LogPager(),knownSources=new Map();
+    const timings=el('div');panel.insertBefore(timings,output);
+    const paging=el('div',undefined,'step-log-sources'),firstPage=el('button',t('Start of log')),nextPage=el('button',t('Next page')),followLive=el('button',t('Follow live'));
+    for(const button of [firstPage,nextPage,followLive])button.type='button';
+    paging.append(firstPage,nextPage,followLive);panel.insertBefore(paging,output);
     const date=value=>value?new Date(value).toLocaleString():t('Unknown');
     function display(){
       if(!latest)return;
-      const file=(latest.references||[]).find(item=>item.path===selected);
+      const file=knownSources.get(selected);
+      const timingNotice=testTimingNotice(document,t,pager.text,latest.slow_test_seconds,latest.test_timings);
+      timingNotice.open=timings.firstElementChild?.open||false;timings.replaceChildren(timingNotice);
       const follow=output.scrollTop+output.clientHeight>=output.scrollHeight-24;
-      const text=file?(file.error||file.content||t('Log file is empty.')):([latest.console_output??latest.output,latest.reason&&!(latest.console_output||'').includes(latest.reason)?latest.reason:''].filter(Boolean).join('\n\n')||t('No log output available yet.'));
-      fileInfo.textContent=file?file.path+' · '+t('File updated')+': '+date(file.modified_at)+(file.truncated?' · '+t('Showing first 8 MiB'):'')+' · '+t('File currently on disk; not an archived snapshot.') : t('Recorded console output for the selected run.');
+      const text=([pager.text,!file&&latest.reason&&!pager.text.includes(latest.reason)?latest.reason:''].filter(Boolean).join('\n\n')||t('No log output available yet.'));
+      fileInfo.textContent=(file?file.path+' · '+t('File updated')+': '+date(file.modified_at)+' · '+t(file.archived?'Archived snapshot from this run.':'File currently on disk; not an archived snapshot.'):t('Recorded console output for the selected run.'))+' · '+t('Recent output is limited; use Start of log and Next page for full history.');
+      nextPage.disabled=!pager.more;followLive.setAttribute('aria-pressed',String(following));
       if(output.textContent!==text){output.textContent=text;if(follow)output.scrollTop=output.scrollHeight;}
     }
-    sourceSelect.onchange=()=>{selected=sourceSelect.value;display();};
+    function navigate(cursor,follow){revision++;following=follow;pager.restart(cursor);clearTimeout(stepLogTimer);void refresh();}
+    sourceSelect.onchange=()=>{autoSource=false;selected=sourceSelect.value;pager.source=selected;navigate(null,true);};
+    firstPage.onclick=()=>{autoSource=false;navigate(null,false);};
+    nextPage.onclick=()=>navigate(pager.cursor,false);
+    followLive.onclick=()=>{following=true;clearTimeout(stepLogTimer);void refresh();};
     const dialog=$('detail');
     async function refresh(){
-      if(!dialog.open||!output.isConnected)return;
+      if(!dialog.open||!output.isConnected||loading)return;
+      loading=true;const requestedRevision=revision;
       try{
-        const result=await client.request('plan/step-log?'+new URLSearchParams({...key(row),step}));
-        if(!dialog.open||!output.isConnected)return;
+        const result=await client.request('plan/step-log?'+new URLSearchParams({...key(row),step,...pager.request()}));
+        if(!dialog.open||!output.isConnected||requestedRevision!==revision)return;
         status.textContent=t({done:'Completed',running:'Running',red:'Failed',todo:'Pending',waiting:'Waiting',cancelled:'Cancelled',unknown:'Unknown'}[result.status]||result.status)+(!result.historical&&result.exit_code!=null?' · Exit '+result.exit_code:'')+(result.historical?' · '+t('Previous run output'):'');
         status.className='step-log-status '+({done:'ok',running:'warn',red:'bad',todo:'dim',waiting:'warn',cancelled:'dim',unknown:'dim'}[result.status]||'dim');
-        latest=result;
+        if(result.reset||(pager.run&&pager.run!==result.run)){knownSources.clear();selected=result.source||'';}
+        pager.accept(result);latest=result;
+        for(const item of result.references||[]){knownSources.set(item.source,item);if(knownSources.size>128)knownSources.delete(knownSources.keys().next().value);}
+        if(autoSource&&result.references?.length){autoSource=false;selected=result.references[0].source;pager.source=selected;navigate(null,true);return;}
         runInfo.textContent=(result.historical?t('Previous run — not the current attempt'):result.status==='running'?t('Current run'):t('Latest recorded run'))+
           ' · '+t('Started')+': '+date(result.started_at)+' · '+t('Ended')+': '+date(result.ended_at)+(result.exit_code!=null?' · '+t('Run result')+': '+(result.exit_code===0?t('Completed'):t('Failed'))+' · Exit '+result.exit_code:'');
         panel.querySelector('h3').textContent=step+' · '+(result.historical?t('Previous run'):result.status==='running'?t('Live'):t('Recorded logs'));
-        const choices=[{path:'',label:t('Console output')},...(result.references||[]).map(item=>({path:item.path,label:t('Referenced file')+': '+item.path}))];
-        if(selected===null)selected=choices[1]?.path||'';
+        const choices=[{path:'',label:t('Console output')},...Array.from(knownSources.values()).map(item=>({path:item.source,label:t('Referenced file')+': '+item.path}))];
         if(!choices.some(item=>item.path===selected))selected='';
         const signature=JSON.stringify(choices);
         if(sourceSelect.dataset.choices!==signature){
@@ -577,7 +669,10 @@ function mount(document, bootstrap) {
         }
         sourceSelect.value=selected;display();
       }catch(error){if(output.isConnected)status.textContent=error.message;}
-      if(dialog.open&&output.isConnected)stepLogTimer=setTimeout(refresh,2000);
+      finally{
+        loading=false;
+        if(dialog.open&&output.isConnected&&(following||requestedRevision!==revision))stepLogTimer=setTimeout(refresh,requestedRevision!==revision||pager.more?100:2000);
+      }
     }
     dialog.addEventListener('close',()=>clearTimeout(stepLogTimer),{once:true});refresh();
   }
@@ -591,7 +686,6 @@ function mount(document, bootstrap) {
     }
     box.append(chain,el('small',`${info.n} / ${info.m}`+(info.phase==='fix'?' · '+t('Fix Agent'):'')+(['Build','Deploy'].includes(info.step)&&info.status==='running'?' · '+t('Version')+': '+(info.version||'–'):''),'hq-step-count'));return box;
   }
-
   function limitsView(rows) {
     const box=el('div',undefined,'model-limits');
     for(const row of rows){
@@ -611,6 +705,7 @@ function mount(document, bootstrap) {
         const slotLine=el('div',undefined,'slot-line');slotLine.append(cells,el('small',`${slots.used||0} / ${slots.total||0}`+(slots.extra?' +'+slots.extra:'')));
         capacity.append(limitHelp(slotLine,t('Agent slots'),[slotTip,slots.hover,slots.reason].filter(Boolean).join(' ')));
       }
+      if(slots.offline){item.append(name,explanation,capacity);box.append(item);continue;}
       if(slots.running)capacity.append(el('small',slots.running));if(slots.reason)capacity.append(el('small',slots.reason,'bad'));
       const windows=el('div',undefined,'quota-windows');
       if(weekly.text){const week=el('div');if(weekly.pct!=null)week.append(meter(weekly.pct,100,weekly.text,weekly.level));week.append(el('small',weekly.text));windows.append(limitHelp(week,t('Weekly usage'),[t('Used quota in the 7-day window; the date is its reset time.'),weekly.text,reserve.age].filter(Boolean).join(' ')));}
@@ -619,560 +714,387 @@ function mount(document, bootstrap) {
     }
     if(!rows.length)box.append(el('p',t('none'),'dim'));return box;
   }
-
   function planProgress(row) {
-
     const box=el('div',undefined,'plan-progress');const track=el('span',undefined,'segmented-progress');
-
     track.setAttribute('role','progressbar');track.setAttribute('aria-label',t('PROGRESS'));track.setAttribute('aria-valuemin','0');track.setAttribute('aria-valuemax','100');track.setAttribute('aria-valuenow',String(row.progress||0));
-
     for(let i=0;i<7;i++)track.append(el('i',undefined,i<Math.round((row.progress||0)*7/100)?'filled':''));
-
     box.append(track,el('span',`${row.done??0}/${row.total??0}`));
-
     box.title=[t('PROGRESS')+': '+(row.progress||0)+'%',...['done','implemented','rejected','waiting'].map(key=>pretty(key)+': '+(row[key]||0)),row.waiting_reasons||''].filter(Boolean).join(' · ');
-
     const details=el('details');details.append(el('summary',t('Details')),el('div',box.title));box.append(details);return box;
-
   }
-
   function renderDetail() {
-
     if (!overlay)return;
-
     const heading=el('h2',t(overlay.title));heading.id='detail-title';
-
     $('detail-body').replaceChildren(heading,overlay.tile?tileContent(overlay.tile,overlay.value):valueView(overlay.value));
-
   }
-
   $('close-detail').onclick=()=>{$('detail').close();overlay=null;};
-
   function valueView(value) {
-
     if (value === null || value === undefined) return el('span','–','dim');
-
     if (typeof value !== 'object')return el('span',value);
-
     if (Array.isArray(value)) {
-
       if(value.length===2 && typeof value[0]==='string' && ['text','dim','gold','cyan','green','red','yellow','blue','warn','bad','ok'].includes(value[1]))return el('div',value[0],value[1]);
-
       if(value.length===2 && typeof value[0]==='string' && Array.isArray(value[1])){
-
         const group=el('div',undefined,'status-group');group.append(el('h3',t(value[0])),valueView(value[1]));return group;
-
       }
-
       const box=el('div');
-
       if(value.every(item=>item && typeof item==='object' && !Array.isArray(item)))box.append(table(value));
-
       else for(const item of value){const line=el('div');line.append(valueView(item));box.append(line);}
-
       return box;
-
     }
-
     const list=el('dl');
-
     for(const [key,item] of Object.entries(value)){list.append(el('dt',pretty(key)),el('dd'));list.lastChild.append(valueView(item));}
-
     return list;
-
   }
-
   function filterLink(text,type,row) {
-
     const link=el('a',text,'dashboard-link');link.href='#dashboard';
-
     link.onclick=event=>{
-
       event.preventDefault();
-
       dashboardFilter={type,label:text,project:row.apiary||row.project,plan:row.plan_path||row.hive||row.name,agent:row.agent,name:row.name,task:row.task};
-
       tilePreview.hidden=true;$('detail').close();render();
-
       view.querySelector('.clear-filter')?.focus({preventScroll:true});
-
     };
-
     return link;
-
   }
-
   function table(rows, columns, extra, options={}) {
-
-    const wrap=el('div',undefined,'table-scroll'), table=el('table'), head=el('tr'), body=el('tbody');
-
+    function missingValue(label){
+      const icon=el('span',undefined,'missing-value-icon');icon.title=t(label);icon.setAttribute('role','img');icon.setAttribute('aria-label',t(label));return icon;
+    }
+    const wrap=el('div',undefined,options.tree?'hive-tree-cells':'table-scroll'), table=el(options.tree?'div':'table'), head=el('tr'), body=el(options.tree?'div':'tbody');
     columns=columns || [...new Set(rows.flatMap(row=>Object.keys(row)))];
-
     for(const key of columns)head.append(el('th',t(options.labels?.[key]||pretty(key))));
-
     if(extra && !options.compact)head.append(el('th',t('Actions')));
-
-    const thead=el('thead');thead.append(head);table.append(thead,body);
-
-    for(const [index,row] of rows.entries()){const tr=el('tr');tr.dataset.kind=row.kind||'';for(const key of columns){const td=el('td');td.dataset.label=t(options.labels?.[key]||pretty(key));
-
-      if(key==='number')td.append(el('span',index+1));
-
+    const thead=el('thead');thead.append(head);if(!options.tree)table.append(thead);table.append(body);
+    for(const [index,row] of rows.entries()){const tr=el(options.tree?'div':'tr');tr.dataset.kind=row.kind||'';for(const key of columns){const td=el(options.tree?'div':'td');td.dataset.column=key;td.dataset.label=t(options.labels?.[key]||pretty(key));
+      if(options.tree && !options.hierarchy && ['model','ctx','tokens'].includes(key)){}
+      else if(options.tree && key==='task' && !options.hierarchy)td.append(planProgress(row));
+      else if(key==='messages')td.append(planMessageButton(row));
+      else if(key==='number')td.append(el('span',index+1));
       else if(options.hierarchy && isPackagePlaceholder(row) && key==='name'){
         const label=filterLink(t('Package'),'plan',row);label.prepend(el('span','└ ','tree-branch'));
         td.append(label);tr.classList.add('child-agent');
       }
       else if(options.hierarchy && isPackagePlaceholder(row) && ['ctx','tokens','runtime','model'].includes(key))td.append(el('span','–','dim'));
-
       else if(key==='name' && options.compact){
-
         const label=filterLink(row.name,options.hierarchy?(['queen','orch'].includes(row.kind)?'queen':'agent'):'plan',row);
-
-        const menu=button('⋯',()=>options.hierarchy?openAgent(row):openPlan(row));menu.className='row-menu';menu.textContent='';menu.title=t('Open details');menu.setAttribute('aria-label',t('Open details')+' · '+row.name);
-
+        const menu=button('⋯',()=>options.hierarchy?openAgent(row):openPlan(row));menu.className='row-menu';menu.textContent='';menu.title=t('Open details');menu.setAttribute('aria-label',t('Open details')+' · '+(options.hierarchy && row.kind==='queen'?t('Queen')+' · ':'')+row.name);
         label.classList.add('row-name');
-
         if(options.hierarchy){
-
           const parent=rows.some(other=>['queen','orch'].includes(other.kind) && other!==row && (other.apiary||other.project)===(row.apiary||row.project) && other.plan_path===row.plan_path);
-
           if(['queen','orch'].includes(row.kind)){
-
             if(row.kind==='orch')label.textContent='HQ';
             const role=el('span',row.kind==='queen'?'Queen · ':'','parent-symbol');
             if(row.kind==='orch'){const icon=el('span',undefined,'system-icon icon-icon_system');icon.setAttribute('aria-hidden','true');role.append(icon);}
-
             if(row.kind==='queen'){const crown=el('span',undefined,'queen-icon');crown.setAttribute('aria-hidden','true');role.prepend(crown);}label.prepend(role);
-
           }
-
-          else if(parent || row.kind==='fix'){label.prepend(el('span',row.kind==='fix'?'└ Fix Agent · ':'└ Agent · ','tree-branch'));tr.classList.add('child-agent');}
-
+          else if(options.tree || parent || row.kind==='fix'){label.prepend(el('span',row.kind==='fix'?'Fix Agent · ':row.embedded?'Subagent · ':'Agent · ','tree-branch'));tr.classList.add('child-agent');}
         }
-
         td.append(label,menu);
-
       }
-
-      else if(options.compact && ['apiary','hive','queen'].includes(key) && row[key] && row[key]!=='–'){
-
+      else if(options.compact && ['apiary','hive','queen'].includes(key) && row[key] && !['–','-'].includes(row[key])){
         td.append(filterLink(row[key],{apiary:'project',hive:'plan',queen:'queen'}[key],row));
-
         if(['apiary','queen','hive'].includes(key)){
-
           const menu=button('⋯',()=>{
-
             const project=row.apiary||row.project;
-
             const actions=el('div',undefined,'actions');
-
             if(key==='hive'){return openPlan(client.state.hives?.find(plan=>plan.apiary===project && plan.plan_path===row.plan_path)||{...row,name:row.hive});}
-
             if(key==='apiary'){
-
               detail(project,client.state.projects?.find(item=>item.name===project)||{name:project});
-
               actions.append(button('Settings',()=>{$('detail').close();selectTab('Projects',project);}));
-
             }else{
-
               const queen=client.state.bees?.find(item=>['queen','orch'].includes(item.kind) && (item.apiary||item.project)===project && item.plan_path===row.plan_path);
-
               return openAgent(queen||{...row,name:row.queen,kind:'queen',agent:row.queen_agent,model:row.queen_model,ctx:row.queen_ctx,ctx_limit:row.queen_ctx_limit,tin:row.queen_tin,tout:row.queen_tout});
-
             }
-
             $('detail-body').prepend(actions);
-
           });
-
           menu.className='row-menu';menu.textContent='';menu.title=t('Open details');menu.setAttribute('aria-label',t('Open details')+' · '+t({apiary:'Project',queen:'Queen',hive:'Plan'}[key])+' · '+row[key]);td.append(menu);
-
         }
-
       }
-
-      else if(key==='tokens')td.append(el('span',tokens(row.tin)+' / '+tokens(row.tout),'cyan'));
-
+      else if(['model','queen'].includes(key) && (!row[key] || ['\u2013','-'].includes(row[key]))){td.append(missingValue(key==='model'?'No model':'No Queen assigned'));}
+      else if(key==='tokens')td.append(el('span',tokens(row.tin)+' / '+tokens(row.tout),'cyan token-values'));
       else if(key==='bees_running')td.append(el('span',`${row.bees_running||0}/${row.bees_total??row.bees_running??0}`));
-
       else if(key==='task' && row.kind==='orch' && orchestrationFor(row,client.state.hives)){td.append(orchestrationView(orchestrationFor(row,client.state.hives),row));}
       else if(key==='task' && row.step){td.classList.add('task-progress');const inline=el('div',undefined,'task-inline');inline.append(el('span',row.task),meter((row.step_frac||0)*100,100,row.step),el('small',row.step,'cyan'));td.append(inline);}
-
-      else if(key==='progress' && Number.isFinite(Number(row[key]))){td.append(planProgress(row));}else if(key==='ctx'){td.classList.add('context-cell');td.append(row.ctx_limit?meter(100*(row.ctx||0)/row.ctx_limit,100,t('CONTEXT')):el('span','–'));if(row.ctx_limit)td.append(el('small',Math.round(100*(row.ctx||0)/row.ctx_limit)+'%'));td.title=tokens(row.ctx)+' / '+tokens(row.ctx_limit);}
-
-      else if(key==='status' && row.orch?.chain){td.append(orchestrationView(row.orch,row));}
-
-      else if(key==='status'){const state=String(row[key]||'');const tone=/^(running|active)$/i.test(state)?'running':/fail|error|reject/i.test(state)?'error':/wait|paus|stop|pending/i.test(state)?'waiting':'neutral';td.append(el('span',t(state),'state-badge state-'+tone));}
-
+      else if(key==='progress' && Number.isFinite(Number(row[key]))){td.append(planProgress(row));}else if(key==='ctx'){td.classList.add('context-cell');td.append(row.ctx_limit?meter(100*(row.ctx||0)/row.ctx_limit,100,t('CONTEXT')):missingValue('No context value available'));if(row.ctx_limit)td.append(el('small',Math.round(100*(row.ctx||0)/row.ctx_limit)+'%'));td.title=tokens(row.ctx)+' / '+tokens(row.ctx_limit);}
+      else if(key==='status' && row.missing){td.append(el('span',t('Plan file missing'),'warn'));}
+      else if(key==='status' && row.orch?.chain && !row.paused && !options.hierarchy){td.append(orchestrationView(row.orch,row));}
+      else if(key==='status'){const state=String(row[key]||'');const tone=/^(running|active)$/i.test(state)?'running':/fail|error|reject/i.test(state)?'error':/wait|paus|stop|pending/i.test(state)?'waiting':'neutral';td.append(el('span',t(state),'state-badge state-'+tone));
+        if(row.paused && !options.hierarchy){const resume=button('Resume',async()=>{
+          const available=await resolvePlanActions(row,route=>client.request(route));
+          if(!available.includes('resume'))throw Error(t('The plan cannot resume yet. Refresh its status.'));
+          await act('plan/resume',key(row),t('Resume')+' '+row.name+'?');
+        });resume.classList.add('plan-resume');td.append(resume);}}
       else td.append(valueView(row[key]));tr.append(td);}if(extra && !options.compact){const td=el('td');td.className='row-actions';td.dataset.label=t('Actions');extra(td,row);tr.append(td);}body.append(tr);}
-
     if(!rows.length){const tr=el('tr'),td=el('td',t('none'),'dim');td.colSpan=columns.length+1;tr.append(td);body.append(tr);}
-
     wrap.append(table);return wrap;
-
   }
-
   function section(title, parent=view) {
-
     const node=el('section'),heading=el('h2',title==='QUEENS AND AGENTS'?'Hive':t(title));node.dataset.panel=title;
-
-    const icon={ 'ACTIVE PLANS':'panel_icon','QUEENS AND AGENTS':'t_queens',Limits:'icon_system',SYSTEM:'icon_system',Queue:'icon_queue',STATUS:'panel_icon',LOG:'icon_logs'}[title];
-
+    const icon={ 'ACTIVE PLANS':'panel_icon','QUEENS AND AGENTS':'t_queens',Limits:'icon_system',SYSTEM:'icon_system',Hives:'t_queens',Queue:'icon_queue',STATUS:'panel_icon',LOG:'icon_logs'}[title];
     if(icon){const image=el('span',undefined,'panel-icon icon-'+icon);image.setAttribute('aria-hidden','true');heading.prepend(image);}
-
     node.append(heading);parent.append(node);return node;
-
   }
-
   async function act(action,data,warning) {const result=await client.action(action,data,warning);if(result){void client.refresh();void refreshLists();}return result;}
-
   function key(row) {return {project:row.project || row.apiary,plan:row.plan_path};}
-
   async function selectTab(name, project) {
-
     if(editor?.dirty && !await requestConfirm(t('Discard unsaved changes?')))return;
-
     generation++;editor=null;tab=name;
-
     for(const node of $('tabs').querySelectorAll('[data-tab]'))node.setAttribute('aria-selected',String(node.dataset.tab===tab));
-
-    const inSettings=['General','Providers','Projects'].includes(tab);
-
+    const inSettings=['Projects','Providers','Git connections','General'].includes(tab);
     settingsToggle.classList.toggle('active',inSettings);
-
     settingsMenu.hidden=true;settingsToggle.setAttribute('aria-expanded','false');
-
     render();void refreshLists();
-
-    if(['General','Providers','Projects'].includes(tab))void loadEditor(tab==='Projects' ? (project??client.state?.projects?.[0]?.name) : '');
-
+    if(tab==='Releases'){releaseProject ||= client.state?.projects?.[0]?.name || '';void loadReleases();}
+    if(['Projects','Providers','Git connections','General'].includes(tab))void loadEditor(tab==='Projects' ? (project??client.state?.projects?.[0]?.name) : '');
   }
-
-  for(const name of ['Dashboard','Plans','Questions','Logs']){
-
+  for(const name of ['Dashboard','Plans','Questions','Logs','Releases']){
     const node=button(name,()=>selectTab(name));node.dataset.tab=name;node.setAttribute('role','tab');node.setAttribute('aria-selected',String(name===tab));$('tabs').append(node);
-
   }
-
   const settingsMenu=el('div',undefined,'settings-subnav');settingsMenu.id='settings-subnav';settingsMenu.hidden=true;settingsMenu.setAttribute('role','group');settingsMenu.setAttribute('aria-label',t('Settings'));
-
   const settingsToggle=button('Settings',()=>{
-
     settingsMenu.hidden=!settingsMenu.hidden;settingsToggle.setAttribute('aria-expanded',String(!settingsMenu.hidden));
-
   });
-
   settingsToggle.id='settings-toggle';settingsToggle.setAttribute('aria-expanded','false');settingsToggle.setAttribute('aria-controls','settings-subnav');
-
   const settingsGroup=el('div',undefined,'settings-menu');settingsGroup.append(settingsToggle,settingsMenu);$('tabs').append(settingsGroup);
-
-  for(const name of ['General','Providers','Projects']){
-
-    const node=button(name,()=>selectTab(name));node.dataset.tab=name;node.setAttribute('role','tab');node.setAttribute('aria-selected','false');settingsMenu.append(node);
-
+  for(const name of ['Projects','Providers','Git connections','General']){
+    const node=button(({General:'System',Providers:'AI providers'})[name]||name,()=>selectTab(name));node.dataset.tab=name;node.setAttribute('role','tab');node.setAttribute('aria-selected','false');settingsMenu.append(node);
   }
-
   document.addEventListener('click',event=>{if(!settingsGroup.contains(event.target)){settingsMenu.hidden=true;settingsToggle.setAttribute('aria-expanded','false');}});
-
   settingsToggle.addEventListener('keydown',event=>{
-
     if(event.key==='ArrowDown'){event.preventDefault();settingsMenu.hidden=false;settingsToggle.setAttribute('aria-expanded','true');settingsMenu.querySelector('button').focus();}
-
     if(event.key==='Escape'){settingsMenu.hidden=true;settingsToggle.setAttribute('aria-expanded','false');}
-
   });
-
   settingsMenu.addEventListener('keydown',event=>{if(event.key==='Escape'){settingsMenu.hidden=true;settingsToggle.setAttribute('aria-expanded','false');settingsToggle.focus();}});
-
+  function displayVersion(version) { return 'v'+String(version || '0').replace(/^v/i,''); }
   function renderState(state) {
-
     renderGate.render();
-
   }
-
   function renderStateNow(state) {
-
-    $('version').textContent=state.version || '';
-
+    $('version').textContent=t('Running %s').replace('%s',displayVersion(state.version));
     renderControls();renderUpdates();
-
     const questionTab=$('tabs').querySelector('[data-tab="Questions"]');
-
     const count=Math.max(0,Number(state.queue?.open??state.queue?.questions??0));
-
     questionTab.querySelector('.question-badge')?.remove();
-
     if(count){const badge=el('span',count,'question-badge');questionTab.append(badge);}
-
     questionTab.setAttribute('aria-label',t('Questions')+' ('+count+')');
-
-    if(tab==='Dashboard' || tab==='Logs')render();
-
+    if(tab==='Dashboard' || tab==='Logs' || tab==='Plans')render();
     if(overlay?.tile){overlay.value=state.overlays?.[overlay.tile];renderDetail();}
-
   }
-
   function renderControls() {
-
     const state=client.state||{},label=state.orchestrator?.label||'',toolbar=el('div',undefined,'toolbar');
-
     const status=el('div',undefined,'orchestrator-status '+({RUNNING:'is-running',STOPPING:'is-stopping',STOPPED:'is-stopped'}[label]||'is-stopped'));
-
     status.append(el('span',t('Orchestrator'),'status-name'),el('span',t(label||'…'),'status-value'));
-
     const menu=el('details',undefined,'controls-menu');menu.open=!!$('controls').querySelector('details')?.open;
-
     menu.append(el('summary',t('Controls')));const panel=el('div',undefined,'controls-popover');
-
     const orchestrator=el('div',undefined,'control-group');orchestrator.append(el('h3',t('Orchestrator')));
-
     for(const action of ['start','stop-gracefully','force-stop']){
-
       const node=button(actions[action],()=>act(action,{},action==='force-stop'?state.controls?.force_warning:t(actions[action]+' HaiveQueen?')));
-
       node.disabled=node.disabled||orchestratorDisabled(action,label);if(action==='force-stop')node.classList.add('danger-action');orchestrator.append(node);
-
     }
-
+    const planControls=el('div',undefined,'control-group');planControls.append(el('h3',t('PLANS')));
+    for(const action of ['stop-gracefully','force-stop','resume']){
+      const warnings={'stop-gracefully':'Pause %s plans? Running work continues; no new work starts.',
+        'force-stop':'Force stop %s plans? Their running work will end immediately.',
+        resume:'Resume %s paused plans?'};
+      const node=button(actions[action],async()=>{
+        try {const result=await client.plansAction(action,count=>t(warnings[action]).replace('%s',count));
+          if(result)client.notice(t('Plans processed: %s').replace('%s',result.count));
+        } finally {void client.refresh();void refreshLists();}
+      });
+      node.disabled=node.disabled||!(state.controls?.plans?.[action]>0);
+      if(action==='force-stop')node.classList.add('danger-action');planControls.append(node);
+    }
     const web=el('div',undefined,'control-group');web.append(el('h3',t('Web server')),
-
       button('Stop',async()=>{if(await client.action('web/stop',{},t('Stop the web server? The browser will disconnect.')))client.notice(t('Web server stopped.'));}),
-
       button('Restart',async()=>{await client.action('web/restart',{},t('Restart the web server? The browser will reconnect.'));}));
-
-    panel.append(orchestrator,web,button('Logout',async()=>{const response=await fetch('/logout',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':client.csrf},body:'{}'});if(response.ok)location.href='/login';else throw Error(t('Logout failed'));}));
-
+    panel.append(orchestrator,planControls,web,button('Logout',async()=>{const response=await fetch('/logout',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':client.csrf},body:'{}'});if(response.ok)location.href='/login';else throw Error(t('Logout failed'));}));
     menu.append(panel);toolbar.append(status,menu);$('controls').replaceChildren(toolbar);
-
   }
-
   document.addEventListener('click',event=>{const menu=$('controls').querySelector('details');if(menu && !menu.contains(event.target))menu.open=false;});
-
   $('controls').addEventListener('keydown',event=>{if(event.key==='Escape'){const menu=$('controls').querySelector('details');if(menu){menu.open=false;menu.querySelector('summary').focus();}}});
-
   function render() {
-
-    const sameTab=view.dataset.tab===tab,pageX=window.scrollX,pageY=window.scrollY;
-
-    const positions=sameTab?[...view.querySelectorAll('.table-scroll,.log,details')].map(node=>({left:node.scrollLeft,top:node.scrollTop,open:node.open})):[];
-
-    const focused=document.activeElement,selection=focused?.selectionStart,editingFilter=sameTab && focused?.placeholder===t('Filter');
-
+    if(tab==='Plans' && document.activeElement?.dataset.planFilter==='search' && document.activeElement?.dataset.composing==='true')return;
+    const sameTab=view.dataset.tab===tab,pageX=window.scrollX,pageY=window.scrollY,navigatingQuestion=tab==='Questions' && questionNavigation;
+    const positions=sameTab?[...view.querySelectorAll('.table-scroll,.hives-list,.log,details')].map(node=>({left:node.scrollLeft,top:node.scrollTop,open:node.open})):[];
+    const focused=document.activeElement,selection=focused?.selectionStart,selectionEnd=focused?.selectionEnd,selectionDirection=focused?.selectionDirection,planFilterFocus=sameTab&&tab==='Plans'?focused?.dataset.planFilter:null,editingFilter=sameTab && focused?.placeholder===t('Filter');
     if(sameTab)view.style.minHeight=view.getBoundingClientRect().height+'px';
-
     view.dataset.tab=tab;view.replaceChildren();
-
     view.className=tab==='Dashboard'?'dashboard':tab==='Logs'?'logs-view':'editor-view';
-
     if(tab==='Dashboard')renderDashboard();
-
     if(tab==='Logs')renderLog();
-
     if(tab==='Plans')renderPlans();
-
     if(tab==='Questions')renderQuestions();
-
-    if(['General','Providers','Projects'].includes(tab))renderEditor();
-
-    [...view.querySelectorAll('.table-scroll,.log,details')].forEach((node,index)=>{if(positions[index] && node.tagName==='DETAILS')node.open=positions[index].open;});
-
+    if(tab==='Releases')renderReleases();
+    if(['Projects','Providers','Git connections','General'].includes(tab))renderEditor();
+    [...view.querySelectorAll('.table-scroll,.hives-list,.log,details')].forEach((node,index)=>{if(positions[index] && node.tagName==='DETAILS')node.open=positions[index].open;});
     fitDashboard();
-
-    [...view.querySelectorAll('.table-scroll,.log,details')].forEach((node,index)=>{const position=positions[index];if(position){node.scrollLeft=position.left;if(!node.classList.contains('log')||!logFollow)node.scrollTop=position.top;}});
-
+    [...view.querySelectorAll('.table-scroll,.hives-list,.log,details')].forEach((node,index)=>{const position=positions[index];if(position){node.scrollLeft=position.left;if(!node.classList.contains('log')||!logFollow)node.scrollTop=position.top;}});
     view.style.minHeight='';
-
-    if(sameTab)window.scrollTo({left:pageX,top:pageY,behavior:'instant'});
-
+    if(sameTab && !navigatingQuestion)window.scrollTo({left:pageX,top:pageY,behavior:'instant'});
+    if(planFilterFocus){const control=view.querySelector('[data-plan-filter="'+planFilterFocus+'"]');control?.focus({preventScroll:true});if(planFilterFocus==='search' && selection!=null)control?.setSelectionRange(selection,selectionEnd,selectionDirection);}
     if(editingFilter){const input=view.querySelector('input[placeholder]');input?.focus({preventScroll:true});input?.setSelectionRange(selection,selection);}
-
   }
-
   function projectSelect(onchange, selected, all=true) {
-
     const select=el('select');select.setAttribute('aria-label',t('Project'));
-
     if(all){const option=el('option',t('all'));option.value='';select.append(option);}
-
     for(const project of client.state?.projects || []){const option=el('option',project.name);option.value=project.name;select.append(option);}
-
     select.value=selected || '';select.onchange=()=>onchange(select.value);return select;
-
   }
-
+  async function loadReleases(quiet=false) {
+    const project=releaseProject,request=++releaseRequest;if(!quiet)releaseData=null;releaseError='';
+    if(tab==='Releases')render();
+    if(!project)return;
+    try{const data=await client.request('releases?'+new URLSearchParams({project}));if(request===releaseRequest)releaseData=data;}
+    catch(error){if(request===releaseRequest)releaseError=error.message;}
+    finally{if(request===releaseRequest&&tab==='Releases')render();}
+  }
+  function renderReleases() {
+    const box=section('Releases');box.classList.add('releases-panel');
+    const toolbar=el('div',undefined,'release-toolbar'),label=el('label',t('Project'));
+    label.append(projectSelect(value=>{releaseProject=value;void loadReleases();},releaseProject,false));
+    toolbar.append(label,button('Reload',()=>loadReleases()));box.append(toolbar);
+    const promotion=releasePromotions.get(releaseProject);
+    if(promotion&&!promotion.source_tag){const status=releaseJobStatus(promotion),feedback=el('p',t(status.text),status.error?'bad':'notice');feedback.setAttribute('role',status.error?'alert':'status');feedback.setAttribute('aria-live','polite');feedback.setAttribute('aria-busy',String(status.busy));box.append(feedback);}
+    const empty=(title,message,bad=false)=>{const state=el('div',undefined,'release-empty');state.setAttribute('role',bad?'alert':'status');state.append(el('h3',t(title)),el('p',t(message),'dim'));box.append(state);};
+    if(!releaseProject){empty('Select a project','Choose a project to see its published releases.');return;}
+    if(releaseError){empty('Could not load releases',releaseError,true);box.append(button('Try again',loadReleases));return;}
+    if(!releaseData){empty('Loading releases…','Fetching release history for the selected project.');return;}
+    const releases=releaseData.releases||[];
+    if(!releases.length){empty('No releases yet',releaseData.reason||'This project has no published releases.');return;}
+    if(releaseData.reason)box.append(el('p',t(releaseData.reason),'dim'));
+    box.append(el('p',releases.length+' '+t('Releases'),'dim'));
+    const list=el('div',undefined,'release-list');box.append(list);
+    for(const row of releases){
+      const card=el('article',undefined,'release-card'),heading=el('div',undefined,'release-heading');
+      const state=releaseCardState(row,releases,promotion);
+      const badge=state.state==='publishing'?'Publishing…':state.state==='failed'?'Publication failed':state.state==='promoted'?t('Promoted to %s').replace('%s',row.full_tag):row.prerelease?'Prerelease':'Stable';
+      heading.append(el('h3',row.version||row.tag),el('span',t(badge),['promoted','stable'].includes(state.state)?'release-badge ok':'release-badge warn'));card.append(heading);
+      const facts=el('dl',undefined,'release-facts');facts.append(el('dt',t('Date')),el('dd',row.date||'–'),el('dt',t('Commit')));
+      const commit=el('dd',row.commit||'–','release-commit');facts.append(commit);card.append(facts);
+      if(state.state==='promoted'){const view=button('View full release',()=>{const target=document.getElementById('release-'+row.full_tag);target?.scrollIntoView({block:'center'});target?.focus();});card.append(view);}
+      else if(row.prerelease&&row.full_tag){const publish=button(state.state==='publishing'?'Publishing…':state.state==='failed'?'Retry':'Publish as full release',async()=>{
+        const project=releaseProject;
+        const job=await startReleasePromotion(client,project,row,status=>{releasePromotions.set(project,status);if(tab==='Releases')render();},t('Publish as full release')+' '+row.full_tag+'?');
+        if(job){job.title='Publish as full release';jobs.set(job.id,job);renderJob(job);if(job.result?.files)await loadReleases(true);}
+      });publish.disabled=publish.disabled||!!promotion?.running||!!(promotion?.result?.pending&&!['published','failed'].includes(promotion.publication?.state));card.append(publish);
+      if(state.error)card.append(el('p',state.error,'bad'));
+      if(state.state==='publishing'){const status=el('p',t(promotion?.running?promotion.progress:'Waiting for full release confirmation'),'dim');status.setAttribute('role','status');status.setAttribute('aria-live','polite');card.append(status);}}
+      card.id='release-'+row.tag;card.tabIndex=-1;list.append(card);
+    }
+  }
   function renderDashboard() {
-
     const state=client.state;
-
-    if(!state){view.append(el('p',t('Loading…')));return;}
-
+    if(!state){view.append(dashboardLoading(document,t));return;}
     const filtered=dashboardRows(state,dashboardFilter);
-
     if(dashboardFilter){
-
       const filterBar=el('div',undefined,'dashboard-filter');filterBar.setAttribute('role','status');
-
       filterBar.append(el('span',t('Filter')+' · '+t({project:'Project',plan:'Plan',queen:'Queen',agent:'Agent'}[dashboardFilter.type])+': '+dashboardFilter.label));
-
       const clear=button('Clear filter',()=>{dashboardFilter=null;render();});clear.className='clear-filter';filterBar.append(clear);view.append(filterBar);
-
     }
-
     const tiles=el('div',undefined,'tiles');
-
     for(const item of dashboardMetrics(state.tiles||{},tokens)){
-
       const tile=item.key,title=t(item.label),metric=button('',()=>showTile(title,tile));
-
-      metric.dataset.tile=tile;metric.setAttribute('aria-haspopup','dialog');metric.setAttribute('aria-describedby','tile-preview');
-
-      metric.onpointerenter=event=>{if(event.pointerType==='mouse')previewTile(metric,title,tile);};metric.onpointerleave=closeTilePreview;metric.onfocus=()=>previewTile(metric,title,tile);metric.onblur=closeTilePreview;
-
+      metric.dataset.tile=tile;metric.setAttribute('aria-haspopup','dialog');
       const icon=el('span',undefined,'dashboard-icon icon-'+item.icon);icon.setAttribute('aria-hidden','true');
-
       const content=el('span',undefined,'metric-copy');content.append(el('span',title,'metric-label'),el('strong',t(item.value)),el('small',t(item.note)));
-
       metric.append(icon,content);tiles.append(metric);
-
     }
-
     view.append(tiles);
-
-    const active=section('ACTIVE PLANS');active.append(table(filtered.hives,['number','name','apiary','queen','queen_version','bees_running','progress','status','runtime'],(cell,row)=>{
-
-      cell.append(button('Plan',()=>openPlan(row)),button('Details',()=>detail(row.name,row)));
-
-      if(row.queen_agent)cell.append(button('Live',()=>openLive({...row,agent:row.queen_agent,project:row.apiary})));
-
-      cell.append(button('Filter log',()=>{selectedPlan=row.name;selectedAgent='';$('detail').close();selectTab('Logs');}));
-
-    },{compact:true,labels:{number:'#',name:'PLAN',queen_version:'VERSION',bees_running:'AGENTS'}}));
-
-    const hiveRows=visibleHiveRows(filtered.bees),counts=hiveCounts(hiveRows);const agents=section('QUEENS AND AGENTS');agents.querySelector('h2').append(el('small',' · '+counts.queens+' '+t('QUEENS')+' · '+counts.agents+' '+t('Agents')));agents.append(table(hiveRows,['number','name','model','hive','task','version','ctx','tokens','status','runtime'],(cell,row)=>{
-
-      if(row.agent)cell.append(button('Live',()=>openLive(row)));
-
-      if(row.stop_agent){const stop=button('Force stop',()=>act('agent/force-stop',{project:row.project,agent:row.stop_agent},t('Stop agent %s (%s)? The package stays stopped until you resume it.').replace('%s',row.name).replace('%s',row.task)));stop.disabled=stop.disabled || !!row.stop_disabled;stop.title=row.stop_disabled||'';cell.append(stop);}
-
-      if(row.stopped)cell.append(button('Resume package',()=>act('package/resume',{...key(row),package:row.package || row.task},t('Resume package')+'?')));
-
-      cell.append(button('Details',()=>detail(row.name,row)),button('Filter log',()=>{selectedAgent=row.agent || row.name;selectedPlan='';$('detail').close();selectTab('Logs');}));
-
-    },{compact:true,hierarchy:true,labels:{number:'#',name:'AGENT',tokens:'TOKENS'}}));
-
-    const grid=el('div',undefined,'grid');view.append(grid);
-
-    section('Limits',grid).append(limitsView(state.limits || []));
-
-    const system=section('SYSTEM',grid);
-
-    for(const [label,key] of [['CPU','cpu'],['RAM','ram_pct'],['Disk','disk_pct']]){
-
-      const line=el('div',undefined,'system-meter'),value=state.system?.[key];
-
-      const meter=el('progress');meter.max=100;meter.value=Number(value)||0;meter.setAttribute('aria-label',label);
-
-      const labelNode=el('span',label);const icon=el('span',undefined,'system-icon icon-icon_'+label.toLowerCase());icon.setAttribute('aria-hidden','true');labelNode.prepend(icon);meter.className=value>=86?'bad':value>=70?'warn':'ok';line.append(labelNode,meter,el('span',value==null?'–':Math.round(value)+'%'));system.append(line);
-
+    const active=section('Hives');active.classList.add('hives-panel');
+    const tree=hiveTree(filtered.hives,filtered.bees,dashboardFilter?[]:state.projects||[]);
+    const list=el('ul',undefined,'hives-list hives-tree');active.append(list);
+    const header=el('li',undefined,'hive-tree-heading');
+    for(const title of ['Project / Plan / Process','MODEL','Progress / Task','CONTEXT','TOKENS','STATUS','RUNTIME'])header.append(el('span',t(title)));
+    list.append(header);
+    const nodes=new Map(tree.map(node=>[node.key,node]));
+    function hidden(node){const parent=nodes.get(node.parent);return !!parent&&(collapsedHives.has(parent.key)||hidden(parent));}
+    const rendered=[];
+    function updateTree(){for(const {node,line,toggle} of rendered){line.hidden=hidden(node);if(toggle){const open=!collapsedHives.has(node.key);toggle.textContent=open?'▾':'▸';toggle.setAttribute('aria-expanded',String(open));}}}
+    for(const node of tree){
+      const line=el('li',undefined,'hive-tree-row hive-tree-'+node.type);line.style.setProperty('--depth',node.depth);line.dataset.key=node.key;
+      const hasChildren=tree.some(child=>child.parent===node.key);
+      let toggle;
+      if(node.type==='project'){
+        const name=el('div',undefined,'hive-project-name');name.append(filterLink(node.row.name,'project',node.row));
+        const info=button('',()=>{detail(node.row.name,state.projects?.find(p=>p.name===node.row.name)||node.row);const actions=el('div',undefined,'actions');actions.append(button('Settings',()=>{$('detail').close();selectTab('Projects',node.row.name);}));$('detail-body').prepend(actions);});info.className='row-menu';info.title=t('Open details');info.setAttribute('aria-label',t('Open details')+' · '+t('Project')+' · '+node.row.name);name.append(info);line.append(name);
+        line.append(el('span',`${tree.filter(child=>child.parent===node.key).length} ${t('Plans')}`,'dim hive-project-count'));
+      }else{
+        const cells=table([node.row],['name','model','task','ctx','tokens','status','runtime'],null,{compact:true,hierarchy:node.type!=='plan',tree:true,labels:{task:node.type==='plan'?'PROGRESS':'TASK',tokens:'TOKENS'}});
+        line.append(cells);
+      }
+      if(hasChildren){toggle=button('',()=>{if(collapsedHives.has(node.key))collapsedHives.delete(node.key);else collapsedHives.add(node.key);updateTree();});toggle.className='hive-tree-toggle';toggle.setAttribute('aria-label',t('Expand or collapse')+' · '+node.row.name);line.prepend(toggle);}
+      rendered.push({node,line,toggle});list.append(line);
     }
-
-    const queue=section('Queue',grid),queueData=state.queue||{};
-
-    const queueCount=el('p',undefined,'queue-count');queueCount.append(el('strong',String(queueData.queued??0)),el('span',t('Queue')));queue.append(queueCount);
+    updateTree();
+    if(!tree.length)list.append(el('li',t('No plans to display.'),'dim'));
+    const grid=el('div',undefined,'grid');view.append(grid);
+    section('Limits',grid).append(limitsView(state.limits || []));
+    const system=section('SYSTEM',grid);
+    for(const [label,key] of [['CPU','cpu'],['RAM','ram_pct'],['Disk','disk_pct']]){
+      const line=el('div',undefined,'system-meter'),value=state.system?.[key];
+      const meter=el('progress');meter.max=100;meter.value=Number(value)||0;meter.setAttribute('aria-label',label);
+      const labelNode=el('span',label);const icon=el('span',undefined,'system-icon icon-icon_'+label.toLowerCase());icon.setAttribute('aria-hidden','true');labelNode.prepend(icon);meter.className=value>=86?'bad':value>=70?'warn':'ok';line.append(labelNode,meter,el('span',value==null?'–':Math.round(value)+'%'));system.append(line);
+    }
+    const queue=section('Queue',grid),queueData=pendingQueue(state.queue||{},state.hives||[]);
+    const queueCount=el('p',undefined,'queue-count');queueCount.append(el('strong',String(queueData.queued??0)),el('span',`${queueData.pending??0} ${t('Queued')} \u00b7 ${queueData.drafts??0} ${t('Drafts')}`));queue.append(queueCount);
     const queueList=el('ol',undefined,'queue-list');
     for(const item of queueData.items||[]){
       const entry=el('li'),heading=el('div',undefined,'queue-entry-heading');
-      const name=(item.plan_path||'').split(/[\\/]/).pop()?.replace(/\.md$/i,'')||item.branch||('#'+item.id);
-      heading.append(item.plan_path?button(name,()=>openQueuedPlan(item)):el('strong',name),
-        el('span',t(item.status==='in_run'?'Integrating':'Queued'),item.status==='in_run'?'warn':'dim'));
-      entry.append(heading,el('small',item.project+' · #'+item.id,'dim'));
-      if(item.branch)entry.append(el('small',item.branch,'queue-branch'));
+      const name=item.name||(item.plan_path||'').split(/[\\/]/).pop()?.replace(/(?:-PLAN)?\.md$/i,'')||item.branch||item.title||('#'+item.id);
+      const link=button('',()=>openQueuedPlan(item));link.className='queue-plan-link';link.setAttribute('aria-haspopup','dialog');
+      link.setAttribute('aria-label',[item.project||item.apiary,name,item.title].filter(Boolean).join(' · '));
+      const identity=el('div',undefined,'queue-identity');identity.append(el('small',item.project||item.apiary||'', 'queue-project'),el('strong',name,'queue-name'));
+      heading.append(identity,el('span',t({DRAFT:'Draft',SENT:'Submitted',QUEUED:'Queued'}[item.status]||item.status),'queue-state '+(item.status==='DRAFT'?'dim':'warn')));
+      link.append(heading);
+      if(item.title&&item.title!==name)link.append(el('span',item.title,'queue-description'));
+      entry.append(link);
       queueList.append(entry);
     }
     if(!queueList.children.length)queue.append(el('p',t('Queue is empty.'),'dim'));
     else queue.append(queueList);
-
     const columns=el('div',undefined,'dashboard-columns');
-
     const primary=el('div',undefined,'dashboard-primary');
-
     const secondary=el('div',undefined,'dashboard-secondary');
-
-    primary.append(active,agents);
-
+    primary.append(active);
     secondary.append(grid.querySelector('[data-panel="Limits"]'),grid.querySelector('[data-panel="SYSTEM"]'),grid.querySelector('[data-panel="Queue"]'));
-
     grid.remove();columns.append(primary,secondary);view.append(columns);
-
     renderUpdates();
-
   }
-
   function fitDashboard(){
     if(tab!=='Dashboard')return;
     const primary=view.querySelector('.dashboard-primary');
-    const plans=primary?.querySelector('[data-panel="ACTIVE PLANS"] .table-scroll');
-    const hive=primary?.querySelector('[data-panel="QUEENS AND AGENTS"] .table-scroll');
-    if(!plans || !hive)return;
-    const rows=[...plans.querySelectorAll('tbody tr')].map(row=>row.getBoundingClientRect().height);
-    const header=plans.querySelector('thead')?.getBoundingClientRect().height||0;
-    const desktop=window.innerWidth>1100;
-    const available=Math.max(340,window.innerHeight-(primary.getBoundingClientRect().top+window.scrollY)-12);
-    primary.style.height=desktop?available+'px':'';
-    const planChrome=plans.parentElement.getBoundingClientRect().height-plans.getBoundingClientRect().height;
-    const hiveChrome=hive.parentElement.getBoundingClientRect().height-hive.getBoundingClientRect().height;
-    const hiveHeight=Math.max(140,hiveChrome+(hive.querySelector('table')?.getBoundingClientRect().height||0)+1);
-    const gap=parseFloat(getComputedStyle(primary).gap)||0;
-    plans.style.maxHeight=dashboardPlanHeight({available:desktop?available:0,planChrome,gap,header,rows,hiveHeight})+'px';
+    const list=primary?.querySelector('.hives-list');
+    if(!list)return;
+    primary.style.height='';
+    list.style.maxHeight=window.innerWidth<=1100?'':Math.max(200,window.innerHeight-Math.max(0,list.getBoundingClientRect().top)-16)+'px';
   }
-
   window.addEventListener('resize',fitDashboard);
-
+  let dashboardScrollFrame=0;
+  window.addEventListener('scroll',()=>{
+    if(!dashboardScrollFrame)dashboardScrollFrame=requestAnimationFrame(()=>{dashboardScrollFrame=0;fitDashboard();});
+  },{passive:true});
   const dashboardResize=new ResizeObserver(()=>requestAnimationFrame(fitDashboard));
-
   for(const node of [document.querySelector('header'),$('tabs'),$('notice')])dashboardResize.observe(node);
-
   function logRows() {
-
     const state=client.state || {};
-
     return (state.log || []).filter((row,index)=>{
-
       const meta=state.log_meta?.[index] || {};
-
       return (state.log_ids?.[index] || 0)>logCleared && (showNoise||!meta.noise) && (!selectedAgent||meta.agent===selectedAgent) && (!selectedPlan||meta.hive===selectedPlan) && (!logFilter||row.join(' ').toLowerCase().includes(logFilter.toLowerCase()));
-
     });
-
   }
-
   function renderLog() {
-
     const box=section('LOG'),bar=el('div',undefined,'toolbar'),search=el('input');search.placeholder=t('Filter');search.value=logFilter;
-
     search.oninput=()=>{logFilter=search.value;drawLog();};
-
     const noise=el('input');noise.type='checkbox';noise.checked=showNoise;noise.onchange=()=>{showNoise=noise.checked;drawLog();};
-
     const noiseLabel=el('label',t('Show routine lines'));noiseLabel.prepend(noise);
-
     const follow=el('input');follow.type='checkbox';follow.checked=logFollow;follow.onchange=()=>{logFollow=follow.checked;};const followLabel=el('label',t('Auto-scroll'));followLabel.prepend(follow);
-
     bar.append(search,noiseLabel,followLabel,button('Clear',()=>{logCleared=Math.max(0,...(client.state.log_ids || []));drawLog();}),button('Save log',()=>{
-
       const link=el('a');link.href=URL.createObjectURL(new Blob([logRows().map(row=>row.join(' ')).join('\n')],{type:'text/plain'}));link.download='haivequeen-log.txt';link.click();URL.revokeObjectURL(link.href);
-
     }),button('all',()=>{selectedPlan='';selectedAgent='';logFilter='';render();}));
-
     box.append(bar);const lines=el('pre',undefined,'log');box.append(lines);
-
     function drawLog(){lines.textContent=logRows().map(row=>row.join(' ')).join('\n');if(logFollow)lines.scrollTop=lines.scrollHeight;}
-
     drawLog();
-
+    if(ownerHistory?.children.length>1)view.append(ownerHistory);
   }
-
   function planDocument(text) {
     const doc=el('div',undefined,'plan-document');
     const inline=(node,value)=>{
@@ -1204,7 +1126,6 @@ function mount(document, bootstrap) {
     }
     flush();return doc;
   }
-
   function packageCards(packages) {
     const grid=el('div',undefined,'plan-packages');
     for(const item of packages){
@@ -1217,7 +1138,7 @@ function mount(document, bootstrap) {
       breakdown.append(el('summary',t('Individual steps')+(item.substeps?.length?' · '+item.substeps.length:'')));
       const list=el('ol');
       for(const step of item.substeps||[]){
-        const line=el('li',undefined,step.status),label={done:'Completed',pending:'Not yet reported complete',unknown:'No matching progress report'}[step.status]||step.status;
+        const line=el('li',undefined,step.status),label={done:'Completed',current:'Current step',pending:'Not yet reported complete',unknown:'No matching progress report'}[step.status]||step.status;
         line.append(el('span',step.status==='done'?'✓':String(step.number),'substep-number'),el('span',step.text),el('small',t(label)));list.append(line);
       }
       breakdown.append(item.substeps?.length?list:el('p',t('No saved step descriptions available for this package.'),'dim'));card.append(breakdown);
@@ -1230,55 +1151,49 @@ function mount(document, bootstrap) {
     if(!packages.length)grid.append(el('p',t('No work packages defined yet.'),'dim'));
     return grid;
   }
-
   function entityFrame(row,kind) {
-
     detail(row.name,row);$('detail').classList.add('entity-dialog');
-
     const body=$('detail-body');body.replaceChildren();body.className='';
-
     const header=el('div',undefined,'entity-header'),heading=el('h2',row.name);heading.id='detail-title';
-
-    header.append(el('small',t(kind)+' · '+(row.apiary||row.project||'')),heading,el('span',t(row.status||'–'),'entity-status'));
-
+    header.append(el('small',t(kind)+' · '+(row.apiary||row.project||'')),heading,el('span',t(row.missing?'Plan file missing':row.status||'–'),'entity-status'));
     const actions=el('div',undefined,'entity-actions');
-
     const layout=el('div',undefined,'entity-layout'),summary=el('div',undefined,'entity-summary'),content=el('div',undefined,'entity-content');
-
     const facts=el('dl',undefined,'entity-facts');
-
     for(const key of ['hive','task','model','queen','runtime','step','waiting_reasons'])if(row[key])facts.append(el('dt',pretty(key)),el('dd',row[key]));
-
     summary.append(facts);
-
     const all=el('details',undefined,'entity-all');all.append(el('summary',t('Details')),valueView(row));summary.append(all);
-
     layout.append(summary,content);body.append(header,actions,layout);return {body,actions,summary,content};
-
   }
-
   function entityStats(parent,values){
-
     const stats=el('div',undefined,'entity-stats');for(const [label,value] of values){const item=el('div');item.append(el('small',t(label)),el('strong',value??'–'));stats.append(item);}parent.prepend(stats);
-
   }
-
+  function renderLiveActivity(run,items){
+    if(!run.activity)return;
+    const expanded=run.expandedActivity||(run.expandedActivity=new Set());
+    const rows=Array.isArray(items)?items:[];
+    const signature=JSON.stringify(rows);if(run.activitySignature===signature)return;run.activitySignature=signature;
+    const ids=new Set(rows.map(item=>item.id));for(const id of expanded)if(!ids.has(id))expanded.delete(id);
+    run.activity.hidden=!rows.length;run.activity.replaceChildren();
+    if(rows.length)run.activity.append(el('h4',t('Recorded activity')));
+    for(const item of rows){
+      const details=el('details',undefined,'live-activity-item');details.open=expanded.has(item.id);
+      const state={running:'Running',completed:'Completed',failed:'Failed',unconfirmed:'Completion not recorded'}[item.state]||'Completion not recorded';
+      details.append(el('summary',t(item.label||'Tool activity')+' · '+t(state)));
+      if(item.command)details.append(el('pre',item.command,'live-activity-command'));
+      if(item.exit!==null && item.exit!==undefined)details.append(el('p',t('Exit code')+': '+item.exit));
+      if(item.output)details.append(el('pre',item.output,'live-activity-output'));
+      details.ontoggle=()=>{if(!details.isConnected)return;if(details.open)expanded.add(item.id);else expanded.delete(item.id);};
+      run.activity.append(details);
+    }
+  }
   async function attachConsole(parent,row){
-
     const panel=el('section',undefined,'entity-console');panel.append(el('h3',t('Live')+' · '+(row.name||'')));
-
-    const output=el('pre',t('Loading…'),'live-output');output.setAttribute('aria-label',t('Live'));panel.append(output);parent.append(panel);
-
+    const activity=el('div',undefined,'live-activity'),output=el('pre',t('Loading…'),'live-output');activity.hidden=true;output.setAttribute('aria-label',t('Live'));panel.append(activity,output);parent.append(panel);
     if(!row.agent && row.kind!=='orch'){output.textContent=t('No live output yet.');return;}
-
-    const run={project:row.project||row.apiary,agent:row.agent,kind:row.kind,hive:row.hive,output,loading:false,initial:true};liveRuns.set('detail',run);await pollLive(run);
-
+    const run={project:row.project||row.apiary,agent:row.agent,kind:row.kind,hive:row.hive,activity,output,loading:false,initial:true};liveRuns.set('detail',run);await pollLive(run);
   }
-
   async function openAgent(row){
-
     const kind={queen:'Queen',orch:'Orchestrator',fix:'Fix Agent'}[row.kind]||'Agent';
-
     const frame=entityFrame(row,kind);
     frame.actions.append(button('Filter log',()=>{selectedAgent=row.agent||row.name;selectedPlan='';$('detail').close();selectTab('Logs');}));
     frame.body.classList.add('agent-detail');
@@ -1302,30 +1217,18 @@ function mount(document, bootstrap) {
       tabs.append(tab);tabButtons.push(tab);
     }
     layout.before(tabs);layout.after(technical);choose(0);
-
     entityStats(frame.summary,[['CONTEXT',row.ctx_limit?Math.round(100*(row.ctx||0)/row.ctx_limit)+'%':'–'],['Tokens in',tokens(row.tin)],['Tokens out',tokens(row.tout)]]);
-
     const task=el('section',undefined,'current-task');task.append(el('h3',t('TASK')),el('p',row.task||'–'));
-
     const orchestration=orchestrationFor(row,client.state.hives);if(orchestration)task.append(orchestrationView(orchestration,row));
     if(row.step)task.append(meter((row.step_frac||0)*100,100,row.step),el('span',row.step));frame.content.append(task);
-
     const plan=client.state.hives?.find(plan=>plan.apiary===(row.apiary||row.project) && plan.plan_path===row.plan_path);
-
     if(plan)frame.actions.append(button('Plan',()=>openPlan(plan)));
-
     if(row.stop_agent){const stop=button('Force stop',()=>act('agent/force-stop',{project:row.project||row.apiary,agent:row.stop_agent},t('Stop agent %s (%s)? The package stays stopped until you resume it.').replace('%s',row.name).replace('%s',row.task)));stop.disabled=stop.disabled||!!row.stop_disabled;stop.title=row.stop_disabled||'';frame.actions.append(stop);}
-
     if(row.stopped)frame.actions.append(button('Resume package',()=>act('package/resume',{...key(row),package:row.package||row.task},t('Resume package')+'?')));
-
     let source=row;
-
     if(!row.agent && row.embedded){source=client.state.bees?.find(parent=>parent.kind==='queen' && parent.apiary===row.apiary && parent.plan_path===row.plan_path)||row;}
-
     await attachConsole(frame.content,source);
-
   }
-
   async function openQueuedPlan(item) {
     try {
       const available=await client.request('plans');
@@ -1334,9 +1237,7 @@ function mount(document, bootstrap) {
       await openPlan(plan);
     } catch(error) { detail(t('Plan details'),error.message); }
   }
-
   async function openPlan(row) {
-
     const frame=entityFrame(row,'Plan'),target=frame.body;
     frame.actions.append(button('Filter log',()=>{selectedPlan=row.name;selectedAgent='';$('detail').close();selectTab('Logs');}));
     frame.body.classList.add('plan-detail');frame.summary.querySelector('.entity-all')?.remove();
@@ -1352,235 +1253,395 @@ function mount(document, bootstrap) {
     layout.before(tabs);layout.after(readerPanel,technical);select(0);
     const extra=Object.fromEntries(Object.entries(row).filter(([key])=>!['name','apiary','project','queen','runtime','done','total','implemented','waiting','rejected','progress','status','hive','task','model','step','waiting_reasons'].includes(key)));
     const facts=el('dl',undefined,'plan-technical-facts');
-    for(const [label,value] of [['Plan path',row.plan_path],['Queen',row.queen_agent],['Model',row.queen_model],['Tokens in',tokens(row.hive_tin)],['Tokens out',tokens(row.hive_tout)]])if(value)facts.append(el('dt',t(label)),el('dd',value));
+    for(const [label,value] of [['Plan path',row.plan_path],['Queen',row.queen_agent],['Version',row.queen_version],['Model',row.queen_model],['Tokens in',tokens(row.hive_tin)],['Tokens out',tokens(row.hive_tout)]])if(value)facts.append(el('dt',t(label)),el('dd',value));
     technical.append(el('h3',t('Technical information')),facts);
     const raw=el('details',undefined,'plan-raw');raw.append(el('summary',t('Raw metadata')),el('pre',JSON.stringify(extra,null,2)));technical.append(raw);
-
     entityStats(frame.summary,[['Completed packages',(row.done??0)+' / '+(row.total??0)],['Implemented',row.implemented??0],['Waiting',row.waiting??0],['Rejected',row.rejected??0]]);
-
+    if(row.queen_version)frame.summary.append(el('p',t('Version')+': '+row.queen_version,'plan-version'));
     const progress=planProgress(row);progress.querySelectorAll('details').forEach(node=>node.remove());frame.summary.prepend(progress);
-
     const reader=el('section',undefined,'plan-reader');reader.append(el('h3',t('Plan text')));
-
     const text=el('div',t('Loading…'),'plan-text');reader.append(text);readerPanel.append(reader);frame.content.append(el('h3',t('Work packages')),el('p',t('Loading…'),'package-loading'));
     if(row.orch)frame.summary.append(el('h3',t('Integration')),orchestrationView(row.orch,row));
-
     void client.request('plan/detail?'+new URLSearchParams(key(row))).then(result=>{
-
       if(!target.contains(reader))return;
-
       text.replaceChildren(planDocument(result.body??result.text??t('No plan text available.')));if(result.text){const source=el('details',undefined,'plan-raw');source.append(el('summary',t('Plan source')),el('pre',result.text,'plan-source'));technical.append(source);}
-
       frame.content.querySelector('.package-loading')?.remove();frame.content.append(packageCards(result.packages||[]));
+      const pending=el('section',undefined,'plan-questions');pending.append(el('h3',t('Open questions and acceptance')));
+      for(const question of result.open_questions||[])pending.append(button('#'+question.id+' · '+t(questionKind(question)),()=>showQuestion(question)));
+      if(!result.open_questions?.length)pending.append(el('p',t('No open questions for this plan.'),'dim'));
+      frame.summary.append(pending);
+      if(row.status==='DRAFT')frame.actions.append(button('Edit draft',()=>openPlanEditor(row,result)));
 
     }).catch(error=>{if(target.contains(reader)){text.textContent=error.message;frame.content.querySelector('.package-loading')?.remove();}});
-
-    for(const action of planActions(row))bar.append(button(actions[action],()=>act('plan/'+action,key(row),t(actions[action])+' '+row.name+'?')));
-
-    // The active dashboard row and the all-plans row use the same plan menu.
-
-    if(!row.status || !/^[A-Z]+$/.test(row.status)){
-
-      bar.append(button('Stop gracefully',()=>act('plan/stop-gracefully',key(row),t('Stop gracefully')+'?')),
-
-        button('Force stop',()=>act('plan/force-stop',key(row),t('Force stop')+'?')));
-
-      if(row.stopped)bar.append(button('Resume',()=>act('plan/resume',key(row),t('Resume')+'?')));
-
-      bar.append(button('Cancel plan',()=>act('plan/cancel',key(row),t('Cancel plan')+'?')));
-
-    }
-
-    if(row.status!=='DONE')bar.append(button('Release',()=>act('owner/release',key(row),t('Release')+'?')));
-
-    let providers;try{providers=await client.request('plan/providers?'+new URLSearchParams(key(row)));}catch(error){if(target.contains(bar))bar.append(el('span',error.message,'bad'));return;}
-
-    if(target!==$('detail-body') || !target.contains(bar))return;
-
-    for(const provider of providers){
-
-      const node=button(t('Restart Queen on %s').replace('%s',provider.name)+(provider.current?' ✓':''),()=>act('plan/restart-queen',{...key(row),provider:provider.name},t('Restart Queen on %s').replace('%s',provider.name)+'?'));
-
-      node.disabled=provider.selectable===false || node.disabled;
-
-      bar.append(node);
-
-    }
-
-  }
-
-  function renderPlans() {
-
-    const box=section('Plans');box.append(table(plans.map(row=>({...row,started:t(row.has_hive?'yes':'no')})),['apiary','name','status','started','waiting_for','error'],(cell,row)=>cell.append(button('Plan',()=>openPlan(row)))));
-
-  }
-
-  function renderQuestions() {
-
-    const box=section('Questions');
-
-    if(!questions.length)box.append(el('p',t('none open')));
-
-    for(const question of questions){
-
-      const card=el('article',undefined,'card question');card.dataset.question=question.id;
-
-      card.append(el('h3','#'+question.id+' '+question.project+' · '+question.plan_path),el('small',question.created_at || ''),el('pre',question.text || question.question || question.item));
-
-      if(question.recommendation){card.append(el('h3',t('Recommendation')),el('pre',question.recommendation));}
-
-      const answer=el('textarea');answer.setAttribute('aria-label',t('Answer'));card.append(answer);
-
-      if(question.recommendation)card.append(button('Use recommendation',()=>{answer.value=question.recommendation;}));
-
-      const apiary=el('input');apiary.type='checkbox';const label=el('label',t('Apply to Project'));label.prepend(apiary);card.append(label);
-
-      const check=question.item==='owner-check' || (String(question.item).startsWith('owner-check-') && question.item!=='owner-check-answered');
-
-      card.append(button(check?'Save note':'Answer',()=>act('questions/answer',{id:question.id,text:answer.value,apiary:apiary.checked})));
-
-      if(check){
-
-        const packages=el('input');packages.placeholder=t('Rejected packages (comma separated)');card.append(packages);
-
-        const packageList=el('div');for(const name of question.packages || []){const label=el('label',name),toggle=el('input');toggle.type='checkbox';toggle.dataset.package=name;toggle.onchange=()=>{packages.value=[...packageList.querySelectorAll('input:checked')].map(node=>node.dataset.package).join(', ');};label.prepend(toggle);packageList.append(label);}card.append(packageList);
-
-        card.append(button('Accept',()=>act('owner/accept',{...key(question),text:answer.value},t('Accept')+'?')),
-
-          button('Reject',()=>act('owner/reject',{...key(question),text:answer.value,packages:packages.value.split(',').map(x=>x.trim()).filter(Boolean)},t('Reject')+'?')));
-
-      }
-
-      box.append(card);
-
-    }
-
-  }
-
-  function renderUpdates() {
-
-    const box=$('update-status');box.replaceChildren();box.title='';
-
-    let label='Check now',colour='dim';
-
-    if(updateState.waiting){label=t('Update waiting');colour='warn';box.title=[updateState.waiting.reason,...(updateState.waiting.jobs||[]).map(j=>[j.kind,j.name,j.project].filter(Boolean).join(' · '))].filter(Boolean).join('\n');}
-    else if(updateState.installing){label=t('Installing update');colour='warn';}
-
-    else if(updateState.failed){label=t('update to %s failed, see STATUS').replace('%s',updateState.failed);colour='bad';}
-
-    else if(updateState.error){label=t('update check failed');colour='bad';}
-
-    else if(updateState.available?.version){label=updateState.available.version;colour='warn';}
-
-    else if(updateState.no_release){label=t('no release published yet');}
-
-    else if(updateState.last_check){label=t('up to date');colour='ok';}
-
-    box.append(el('span',t(label),colour));
-
-    if(updateState.waiting)box.append(button('Force update',async()=>{await act('updates/force',{},t(bootstrap.forceWarning));}));
-
-    if(updateState.available?.version && !updateState.installing)box.append(button('Update',async()=>{await act('updates/install',{version:updateState.available.version},t(bootstrap.updateConfirm).replace('%s',updateState.available.version));}));
-
-    const check=button('Check now',async()=>{updateState=await client.action('updates/check');renderUpdates();});check.disabled=check.disabled||!!updateState.installing;check.classList.add('update-check');box.append(check);
-
-  }
-
-  async function loadEditor(project='') {
-
-    if(tab==='Projects' && !project){client.notice(t('Add Project'));renderEditor();return;}
-
-    const token=++generation, pageTab=tab;
-
-    client.notice('Loading…');
-
     try {
-
-      const loaded=await client.request('settings/view'+(project?'?project='+encodeURIComponent(project):''));
-
-      if(token!==generation || pageTab!==tab)return;
-
-      editor={...loaded,project,dirty:false};
-
-      if(!project)editor.data=mergeDefaults(bootstrap.general,editor.data);
-
-      client.notice('');render();
-
-    }catch(error){client.notice(error.message,true);}
-
-  }
-
-  function mergeDefaults(defaults, data) {
-
-    const out=copy(defaults);
-
-    for(const [key,value] of Object.entries(data || {}))out[key]=(value && typeof value==='object' && !Array.isArray(value) && out[key] && typeof out[key]==='object' && !Array.isArray(out[key]))?mergeDefaults(out[key],value):copy(value);
-
-    return out;
-
-  }
-
-  function renderEditor() {
-
-    if(tab==='Projects'){
-
-      const bar=el('div',undefined,'toolbar');bar.append(projectSelect(async value=>{if(editor?.dirty&&!await requestConfirm(t('Discard unsaved changes?')))return;await loadEditor(value);},editor?.project,false),
-
-        button('Add Project',addProject),button('Remove entry',async()=>{
-
-          if(!editor?.project)return;
-
-          const machine=await client.request('settings/view'),data=copy(machine.data);
-
-          data.projects=(data.projects || []).filter(project=>project.name!==editor.project);
-
-          await client.action('settings/save',{revision:machine.revision,data},t('Remove this Project from the settings?'));
-
-        }));view.append(bar);
-
+      const available=await resolvePlanActions(row,route=>client.request(route));
+      if(!target.contains(bar))return;
+      for(const action of available)bar.append(button(actions[action],()=>act('plan/'+action,key(row),t(actions[action])+' '+row.name+'?')));
+    } catch(error) {if(target.contains(bar))bar.append(el('span',error.message,'bad'));}
+    if(row.status!=='DONE')bar.append(button('Release readiness gate',()=>act('owner/release',key(row),t('Allow this plan past the readiness check? This does not publish a release.'))));
+    let providers;try{providers=await client.request('plan/providers?'+new URLSearchParams(key(row)));}catch(error){if(target.contains(bar))bar.append(el('span',error.message,'bad'));return;}
+    if(target!==$('detail-body') || !target.contains(bar))return;
+    for(const provider of providers){
+      const node=button(t('Restart Queen on %s').replace('%s',provider.name)+(provider.current?' ✓':''),()=>act('plan/restart-queen',{...key(row),provider:provider.name},t('Restart Queen on %s').replace('%s',provider.name)+'?'));
+      node.disabled=provider.selectable===false || node.disabled;
+      bar.append(node);
     }
+  }
+  function showQuestion(question) {
+    openConversation(question.project,question.plan_path,Number(question.id));
+  }
+  function openConversation(project,plan,id=null,keepFilter=false) {
+    selectedThread=JSON.stringify([project,plan||'']);questionFocus=id;questionNavigation=true;if(!keepFilter)questionFilter='all';conversationMobile=true;
+    $('detail').close();void selectTab('Questions');
+  }
+  function planMessageButton(row) {
+    const thread=questionThreads(questions,[row]).find(item=>item.project===(row.project||row.apiary)&&item.plan===(row.plan_path||''));
+    const pending=thread?.pending||[];
+    const label=pending.length?pending.length+' '+t('pending')+(pending.some(q=>questionKind(q)==='Acceptance')?' · '+t('Acceptance'):''):t('Conversation');
+    const node=button(label,()=>openConversation(row.project||row.apiary,row.plan_path));node.className='plan-message-button'+(pending.length?' needs-you':'');node.setAttribute('aria-label',t('Messages')+' · '+row.name+' · '+label);return node;
+  }
+  async function openPlanEditor(row=null,result=null,fresh=false) {
+    if(!client.state?.projects){client.notice(t('Loading…'));return;}
+    if(!client.state?.projects?.length){client.notice(t('Add a project before creating a plan.'),true);return;}
+    const replacing=fresh || (row && planDraft && (planDraft.plan!==row.plan_path || planDraft.project!==(row.apiary||row.project)));
+    if(replacing && planDraft?.dirty && !await requestConfirm(t('Discard unsaved changes?')))return;
+    if(fresh)planDraft=null;
+    if(row && row.status!=='DRAFT')return;
+    planDraft=row && (!planDraft || planDraft.plan!==row.plan_path || planDraft.project!==(row.apiary||row.project))?{project:row.apiary||row.project,plan:row.plan_path,filename:row.plan_path,content:result.text||'',revision:result.revision,dirty:false}:planDraft||{project:client.state.projects?.[0]?.name||'',filename:'',content:t("# Plan title\n\nDescribe what should change and the result you expect.\n"),dirty:false};
+    detail(t(row?'Edit draft':'New plan'),{});const body=$('detail-body');body.className='';const heading=el('h2',t(row?'Edit draft':'New plan'));heading.id='detail-title';body.replaceChildren(heading);
+    const current=planDraft,form=el('div',undefined,'plan-editor');body.append(form);
+    form.append(el('p',t('Save Markdown as a draft, then submit it explicitly to start preparation.')));
+    const project=el('select');project.setAttribute('aria-label',t('Project'));
+    for(const item of client.state.projects||[]){const option=el('option',item.name);option.value=item.name;project.append(option);}project.value=current.project;project.disabled=!!current.plan||!!current.saving;
+    const filename=el('input');filename.value=current.filename;filename.setAttribute('aria-label',t('Plan file'));filename.placeholder='example-PLAN.md';filename.disabled=!!current.plan||!!current.saving;
+    const hint=el('p',undefined,'dim');
+    function projectHint(){const item=client.state.projects?.find(item=>item.name===current.project);hint.textContent=t('Plan files')+': '+(item?.plan_globs||[]).join(', ');if(!current.saving && !current.plan && (!current.filename || current.autoFilename)){current.filename=(item?.suggested_plan_folder?item.suggested_plan_folder+'/':'')+'new-PLAN.md';current.autoFilename=true;filename.value=current.filename;}}
+    project.onchange=()=>{if(current.saving)return;current.project=project.value;markDirty();projectHint();};projectHint();
+    filename.oninput=()=>{if(current.saving)return;current.autoFilename=false;current.filename=filename.value;markDirty();};
+    const content=el('textarea');content.value=current.content;content.className='plan-markdown';content.setAttribute('aria-label',t('Plan Markdown'));content.oninput=()=>{current.content=content.value;markDirty();};
+    const imported=el('input');imported.type='file';imported.accept='.md,text/markdown';imported.setAttribute('aria-label',t('Import Markdown'));
+    imported.onchange=async()=>{const file=imported.files?.[0];if(!file)return;if(!/\.md$/i.test(file.name)){client.notice(t('Choose a Markdown (.md) file.'),true);return;}try{const value=await file.text();if(current!==planDraft)return;current.content=value;content.value=value;markDirty();submit.disabled=true;}catch(error){client.notice(error.message,true);}};
+    const status=el('p',current.dirty?t('Unsaved changes'):'', 'dim'),controls=el('div',undefined,'actions');
+    status.setAttribute('role','status');
+    function markDirty(){current.dirty=true;current.saveStatus='Unsaved changes';current.syncEditor?.();}
+    const submit=button('Submit plan',async()=>{if(current.saving||current.dirty||!current.plan){client.notice(t('Save the draft before submitting.'),true);return;}const result=await act('plan/start',{project:current.project,plan:current.plan},t('Submit this draft for preparation?'));if(result){planDraft=null;$('detail').close();}});
+    const save=button('Save draft',async()=>{
+      if(current.saving)return;
+      const sent={project:current.project,filename:current.filename,plan:current.plan,content:current.content,revision:current.revision};
+      current.saving=true;current.syncEditor?.();
+      try{
+        const result=await client.action(current.plan?'plans/save':'plans/create',sent);if(!result)return;
+        current.plan=result.plan;current.revision=result.revision;current.dirty=current.content!==sent.content||current.filename!==sent.filename;
+        current.saveStatus=current.dirty?'Saved. Newer edits are still unsaved.':'Draft saved. Submit when ready.';void refreshLists();
+      }finally{current.saving=false;current.syncEditor?.();}
+    });
+    current.syncEditor=()=>{project.disabled=!!current.plan||!!current.saving;filename.disabled=project.disabled;save.disabled=!!current.saving;submit.disabled=!!current.saving||!current.plan||current.dirty;status.textContent=t(current.saveStatus||(current.dirty?'Unsaved changes':''));};
+    current.syncEditor();
+    controls.append(save,submit);form.append(el('label',t('Project')),project,hint,el('label',t('Plan file')),filename,imported,content,controls,status);
+  }
+  function planQuestions(row,items) {
+    return items.filter(question=>question.project===(row.project||row.apiary)&&(question.plan_path||'')===(row.plan_path||''));
+  }
+  function filterPlanRows(rows,filters,items=[]) {
+    const query=filters.search.trim().toLocaleLowerCase();
+    const active=['SENT','PREPARING','QUEUED','RUNNING','WAITING'];
+    return rows.filter(row=>(!filters.project||(row.project||row.apiary)===filters.project)&&(!filters.status||(filters.status==='active'?active.includes(row.status):filters.status==='needs-you'?planQuestions(row,items).some(q=>q.status==='open'):row.status===filters.status))&&(!query||[row.title,row.name,row.plan_path,row.project||row.apiary].some(value=>String(value||'').toLocaleLowerCase().includes(query))));
+  }
+  function planStatusLabel(row) {
+    return t({DRAFT:'Draft',SENT:'Submitted',PREPARING:'Preparing',QUEUED:'Queued',RUNNING:'In progress',WAITING:'Waiting',REVIEW:'Ready for review',DONE:'Completed',PAUSED:'Paused',CANCELLED:'Cancelled'}[row.status]||row.status||'Unknown');
+  }
+  async function editPlanFromList(row) {
+    const detail=await client.request('plan/detail?'+new URLSearchParams(key(row))),latest={...row,...detail.plan};
+    if(latest.status!=='DRAFT'||latest.missing||latest.recovery_error||latest.error){await openPlan(latest);return;}
+    await openPlanEditor(latest,detail);
+  }
+  function prioritizePlanRows(rows,items) {
+    const rank=row=>row.error||row.missing||row.recovery_error?0:planQuestions(row,items).some(q=>q.status==='open')?1:2;
+    return rows.map((row,index)=>({row,index,rank:rank(row)})).sort((a,b)=>a.rank-b.rank||a.index-b.index).map(item=>item.row);
+  }
+  function renderPlans() {
+    const box=section('Plans');box.className='plans-overview';
+    if(!plansLoaded){const loading=el('p',t('Loading plans…'),'plan-quiet');loading.setAttribute('role','status');box.append(loading);return;}
+    const toolbar=el('div',undefined,'plans-toolbar'),search=el('input');search.type='search';search.value=planFilters.search;search.placeholder=t('Find a plan…');search.dataset.planFilter='search';search.setAttribute('aria-label',t('Search plans'));
+    search.oncompositionstart=()=>{search.dataset.composing='true';};search.oncompositionend=()=>{search.dataset.composing='false';planFilters.search=search.value;render();};search.oninput=()=>{planFilters.search=search.value;render();};
+    const searchLabel=el('label',t('Search plans'),'plans-search');searchLabel.append(search);toolbar.append(searchLabel);
+    const create=button('New plan',()=>openPlanEditor(null,null,true));create.className='plan-primary-action';create.disabled=create.disabled||!client.state?.projects?.length;toolbar.append(create);if(planDraft)toolbar.append(button('Continue draft',()=>openPlanEditor()));box.append(toolbar);
+    const statuses=[['','All'],['needs-you','Needs you'],['DRAFT','Drafts'],['active','In progress'],['REVIEW','Review'],['DONE','Completed']];
+    for(const [value,label] of [['PAUSED','Paused'],['CANCELLED','Cancelled']])if(plans.some(row=>row.status===value)||planFilters.status===value)statuses.push([value,label]);
+    const tabs=el('div',undefined,'plan-status-tabs');tabs.setAttribute('role','group');tabs.setAttribute('aria-label',t('Status'));
+    for(const [value,label] of statuses){
+      const count=value==='needs-you'&&!questionsLoaded?'–':filterPlanRows(plans,{...planFilters,status:value},questions).length;
+      const control=button('',()=>{planFilters.status=value;render();});control.dataset.planFilter='status-'+value;control.dataset.planStatus=value;control.setAttribute('aria-pressed',String(planFilters.status===value));control.setAttribute('aria-label',t(label)+' · '+count);control.append(el('span',t(label)),el('span',count,'plan-chip-count'));control.disabled=control.disabled||(value==='needs-you'&&!questionsLoaded);tabs.append(control);
+    }
+    box.append(tabs);
+    const projects=[...new Set([...plans.map(row=>row.project||row.apiary),planFilters.project].filter(Boolean))].sort();
+    if(projects.length>1||planFilters.project){const group=el('div',undefined,'plan-project-chips');group.setAttribute('role','group');group.setAttribute('aria-label',t('Project'));group.append(el('span',t('Project'),'plan-project-label'));
+      for(const project of ['',...projects]){const chip=button(project||t('All projects'),()=>{planFilters.project=project;render();});chip.dataset.planFilter='project-'+encodeURIComponent(project);chip.dataset.planProject=project;chip.setAttribute('aria-pressed',String(project===planFilters.project));group.append(chip);}box.append(group);
+    }
+    const filtered=filterPlanRows(plans,planFilters,questions),summary=el('div',undefined,'plan-results-summary'),count=el('span',t('%s of %s plans').replace('%s',filtered.length).replace('%s',plans.length));count.setAttribute('role','status');summary.append(count);
+    if(planFilters.search||planFilters.project||planFilters.status)summary.append(button('Clear filters',()=>{planFilters.search='';planFilters.project='';planFilters.status='';render();view.querySelector('[data-plan-filter="search"]')?.focus({preventScroll:true});}));box.append(summary);
+    const list=el('div',undefined,'plan-overview-list');box.append(list);
+    for(const row of prioritizePlanRows(filtered,questions)){
+      const related=planQuestions(row,questions),pending=related.filter(question=>question.status==='open'),acceptance=pending.filter(question=>questionKind(question)==='Acceptance').length;
+      const attention=!!(row.error||row.missing||row.recovery_error),needs=questionsLoaded&&pending.length;
+      const card=el('article',undefined,'plan-overview-card'),identity=el('div',undefined,'plan-card-identity'),title=el('h3',row.title||row.name),status=el('span',attention?t('Needs attention'):needs?t(acceptance?'Your review needed':'Your answer needed'):planStatusLabel(row),'plan-card-status '+(attention?'needs-attention':needs?'needs-you':'status-'+String(row.status||'').toLowerCase()));card.dataset.plan=row.plan_path;
+      identity.append(el('small',t('Project')+' · '+(row.project||row.apiary),'plan-card-project'),title,status);
+      if(attention||needs)identity.append(el('span',t('Status')+' · '+planStatusLabel(row),'plan-lifecycle-meta'));
+      if(row.status==='WAITING'&&row.waiting_for)identity.append(el('p',row.waiting_for,'plan-card-context'));
+      if(row.missing)identity.append(el('p',t('Plan file missing'),'warn'));
+      if(row.error||row.recovery_error){const issue=el('details',undefined,'plan-card-issue');issue.append(el('summary',t('Plan issue')),el('pre',[row.error,row.recovery_error].filter(Boolean).join('\n')));identity.append(issue);}
+      const actions=el('div',undefined,'plan-card-actions');
+      if(!questionsLoaded)actions.append(el('span',t('Loading messages…'),'plan-quiet'));
+      else if(pending.length){
+        const labels=[];if(pending.length-acceptance)labels.push(t(pending.length-acceptance===1?'1 question':'%s questions').replace('%s',pending.length-acceptance));if(acceptance)labels.push(t(acceptance===1?'1 acceptance':'%s acceptances').replace('%s',acceptance));actions.append(el('span',labels.join(' · '),'plan-pending-count'));
+        const target=pending.find(question=>questionKind(question)==='Acceptance')||pending[0],label=acceptance?t(acceptance===1?'Review result':'Review %s results').replace('%s',acceptance):t(pending.length===1?'Answer question':'Answer %s questions').replace('%s',pending.length);
+        const respond=button(label,()=>openConversation(row.project||row.apiary,row.plan_path,Number(target.id)));respond.className='plan-card-primary highlighted';actions.append(respond);
+      }
+      else if(related.length){const history=button('View conversation',()=>openConversation(row.project||row.apiary,row.plan_path));history.className='plan-history-link';actions.append(history);}
+      else actions.append(el('span',t('No open questions'),'plan-quiet'));
+      const editable=row.status==='DRAFT'&&!attention,label=needs||attention?'View plan':editable?'Edit draft':row.status==='REVIEW'?'View result':'View plan';
+      const primary=button(label,()=>editable&&!needs?editPlanFromList(row):openPlan(row));primary.className=needs?'plan-history-link':'plan-card-primary'+(editable||row.status==='REVIEW'&&!attention?' highlighted':'');actions.append(primary);card.append(identity,actions);list.append(card);
+    }
+    if(!filtered.length){const empty=el('div',undefined,'plan-list-empty');empty.append(el('h3',t(plans.length?'No plans match these filters.':'No plans yet')),el('p',t(plans.length?'Try another search or clear the filters.':'Create a plan to describe the result you want.')));list.append(empty);}
+  }
+  function questionKind(question) {
+    if(question.kind==='acceptance' || question.item==='owner-check' || String(question.item).startsWith('owner-check-'))return 'Acceptance';
+    return question.kind==='decision'?'Decision':'Question';
+  }
+  function questionAnswered(question) {
+    return question.status?question.status==='answered':!!question.answered_at;
+  }
+  function questionThreads(items,planRows) {
+    const groups=new Map();
+    function ensure(project,plan,name='',status=''){
+      const id=JSON.stringify([project,plan||'']);
+      if(!groups.has(id))groups.set(id,{id,project,plan:plan||'',name:name||String(plan||'').split(/[\\/]/).pop().replace(/\.md$/i,'')||project,status,questions:[],pending:[]});
+      return groups.get(id);
+    }
+    for(const row of planRows)ensure(row.project||row.apiary,row.plan_path,row.name,row.status);
+    for(const question of items){const thread=ensure(question.project,question.plan_path);thread.questions.push(question);if(!question.status||question.status==='open')thread.pending.push(question);}
+    return [...groups.values()].sort((a,b)=>a.project.localeCompare(b.project)||a.name.localeCompare(b.name));
+  }
+  function questionTimeline(items) {
+    const events=[];
+    for(const question of items){
+      events.push({question,type:'question',at:question.created_at||'',text:String(question.text||question.question||question.item||'')});
+      if(question.answer)events.push({question,type:'answer',at:question.answered_at||question.created_at||'',text:question.answer});
+    }
+    return events.sort((a,b)=>a.at.localeCompare(b.at)||Number(a.question.id)-Number(b.question.id)||(a.type==='question'?-1:1));
+  }
+  function questionEvidence(question){
+    const evidence=el('details'),content=el('div');
+    evidence.append(el('summary',t('Context and evidence')),content);
+    evidence.ontoggle=async()=>{
+      if(!evidence.open)return;
+      content.replaceChildren(el('p',t('Loading messages\u2026')));
+      try{
+        const value=question.details_pending?await questionDetails.load(question):question;
+        content.replaceChildren(valueView(value.evidence||{}));
+      }catch(error){content.replaceChildren(el('p',error.message),button('Retry',()=>{questionDetails.entries.delete(question.id);void evidence.ontoggle();}));}
+    };
+    return evidence;
+  }
+  function questionCard(question) {
+      if(question.details_pending){
+        const entry=questionDetails.get(question);
+        if(entry?.value)question=entry.value;
+        else {
+          const loading=el('article',undefined,'card question');loading.setAttribute('aria-busy',String(!entry?.error));
+          loading.append(el('p',entry?.error?entry.error.message:t('Loading messages\u2026')));
+          const redraw=()=>{if(tab==='Questions')renderQuestionsPage();};
+          if(entry?.error)loading.append(button('Retry',()=>{void questionDetails.retry(question).then(redraw,redraw);redraw();}));
+          else if(!entry)void questionDetails.load(question).then(redraw,redraw);
+          return loading;
+        }
+      }
+      const answered=questionAnswered(question),kind=questionKind(question),check=kind==='Acceptance';
+      const card=el('article',undefined,'card question');card.dataset.question=question.id;card.tabIndex=-1;card.setAttribute('aria-label',t(kind)+' #'+question.id+' '+question.project);
+      card.append(el('small',t(kind)+' #'+question.id+' · '+t(answered?'Answered':'Needs you')));
 
+      const message=String(question.text||question.question||question.item||'');
+      const lines=message.split(/\r?\n/);
+      card.append(el('div',message,'question-summary'));
+      if(check){
+        const facts=el('dl',undefined,'package-facts');
+        for(const [label,prefixes] of [['Integrated commit',['Integrated commit:','Integrierter Commit:']],['Steps that ran',['Steps that ran:','Ausgeführte Schritte:']]] ){
+          const reportIndex=lines.findIndex(line=>/^(Report of the (Queen|fix agent)|Bericht (der Queen|des Fix-Agenten)):$/.test(line));
+          const line=(reportIndex<0?lines:lines.slice(0,reportIndex)).find(line=>prefixes.some(prefix=>line.startsWith(prefix)));
+          if(line)facts.append(el('dt',t(label)),el('dd',line.slice(line.indexOf(':')+1).trim()));
+        }
+        if(facts.children.length)card.append(facts);
+        if(question.owner_check_result)card.append(el('strong',t(question.owner_check_result==='accepted'?'Accepted':'Rejected')));
+      }
+      if(check)card.append(el('p',t('Review the result. Save note records feedback; only Accept or Reject decides the outcome.'),'dim'));
+      if(question.evidence && Object.values(question.evidence).some(value=>Array.isArray(value)?value.length:!!value)){const evidence=el('details');evidence.append(el('summary',t('Context and evidence')),valueView(question.evidence));card.append(evidence);}
+      if(question.recommendation){const recommendation=el('div',undefined,'question-recommendation');recommendation.append(el('h3',t('Recommendation')),el('p',question.recommendation));card.append(recommendation);}
+      if(!answered && question.answer){const note=el('details');note.append(el('summary',t('Latest saved note')),el('pre',question.answer));card.append(note);}
+      if(answered){card.append(el('h4',t('Answer')),el('pre',question.answer||'–'),el('small',[question.answered_at,question.answered_by].filter(Boolean).join(' · ')));return card;}
+      const draft=questionDrafts.get(Number(question.id))||{text:'',checked:false,packages:''};questionDrafts.set(Number(question.id),draft);
+      card.append(el('h3',t(check?'Note or acceptance feedback':'Answer')));
+      const answer=el('textarea');answer.className='question-reply';answer.setAttribute('data-copy','off');answer.value=draft.text;answer.setAttribute('aria-label',t(check?'Note or acceptance feedback':'Answer'));answer.oninput=()=>{draft.text=answer.value;};card.append(answer);
+      if(question.recommendation)card.append(button('Use recommendation',()=>{answer.value=question.recommendation;draft.text=answer.value;}));
+      const apiary=el('input');apiary.type='checkbox';apiary.checked=draft.checked;apiary.onchange=()=>{draft.checked=apiary.checked;};const label=el('label',t('Apply answer to the whole project'));label.prepend(apiary);if(!check){label.className='question-answer-scope';card.append(label);}
+      const submit=button(check?'Save note':'Answer',async()=>{const sent=answer.value;const result=await act('questions/answer',{id:question.id,text:sent,apiary:apiary.checked});if(result && draft.text===sent){draft.text='';answer.value='';}});submit.className='messenger-primary';card.append(submit);
+      if(check){
+        const packages=el('input');packages.value=draft.packages;packages.placeholder=t('Rejected packages (comma separated)');packages.setAttribute('aria-label',t('Rejected packages (comma separated)'));packages.oninput=()=>{draft.packages=packages.value;};const specific=el('details');specific.append(el('summary',t('Specific packages')),packages);card.append(specific);
+        const packageList=el('div',undefined,'question-packages');for(const name of question.packages||[]){const label=el('label',name),toggle=el('input');toggle.type='checkbox';toggle.dataset.package=name;toggle.checked=draft.packages.split(',').map(x=>x.trim()).includes(name);toggle.onchange=()=>{const selected=new Set(packages.value.split(',').map(x=>x.trim()).filter(Boolean));if(toggle.checked)selected.add(name);else selected.delete(name);packages.value=[...selected].join(', ');draft.packages=packages.value;};label.prepend(toggle);packageList.append(label);}specific.append(packageList,el('p',t('Select the packages needing rework. Leave empty to reject the overall result.'),'dim'));
+        const actions=el('div',undefined,'messenger-decision-actions'),accept=button('Accept',()=>act('owner/accept',{...key(question),text:answer.value},t('Accept the plan result?')));accept.className='messenger-primary';actions.append(accept,button('Request changes',()=>act('owner/reject',{...key(question),text:answer.value,packages:packages.value.split(',').map(x=>x.trim()).filter(Boolean)},t('Reject the result and request rework?'))));card.append(actions);
+      }
+      return card;
+  }
+  function renderQuestions() {
+    const box=section('Questions');box.className='questions-messenger';box.dataset.mobileChat=String(conversationMobile);
+    if(!questionsLoaded){box.setAttribute('aria-busy','true');box.append(el('p',t('Loading messages\u2026'),'messenger-empty'));return;}
+    const threads=questionThreads(questions,plans),shown=threads.filter(thread=>questionFilter==='all'||(questionFilter==='open'?thread.pending.length:thread.questions.length&&!thread.pending.length&&thread.questions.every(questionAnswered)));
+    if(!selectedThread && shown.length)selectedThread=shown[0].id;
+    const selected=shown.find(thread=>thread.id===selectedThread)||shown[0];if(selected)selectedThread=selected.id;
+    const inbox=el('aside',undefined,'messenger-inbox'),heading=el('div',undefined,'messenger-inbox-head');
+    heading.append(el('h2',t('Questions')),el('span',questions.filter(q=>!q.status||q.status==='open').length+' '+t('pending'),'messenger-count'));
+    const filters=el('div',undefined,'messenger-filters');
+    for(const [value,label] of [['open','Needs you'],['all','All'],['answered','Completed']]){const control=button(label,()=>{questionFilter=value;selectedThread=null;conversationMobile=false;renderQuestionsPage();});control.setAttribute('aria-pressed',String(questionFilter===value));filters.append(control);}heading.append(filters);inbox.append(heading);
+    for(const project of [...new Set(shown.map(thread=>thread.project))]){
+      const group=el('section',undefined,'messenger-project'),projectCount=shown.filter(thread=>thread.project===project).reduce((sum,thread)=>sum+thread.pending.length,0);
+      const projectHeading=el('h3',undefined,'messenger-project-heading');projectHeading.append(el('small',t('Project')),el('strong',project),el('span',projectCount+' '+t('pending')));group.append(projectHeading);
+      for(const thread of shown.filter(thread=>thread.project===project)){
+        const target=thread.pending[0]||thread.questions.at(-1),preview=String(target?.text||target?.question||target?.item||'').split(/\r?\n/).find(line=>line.trim())||t('No recorded questions.');
+        const row=button('',()=>openConversation(thread.project,thread.plan,null,true));row.className='messenger-thread';row.setAttribute('aria-pressed',String(thread.id===selectedThread));row.setAttribute('aria-label',t('Project')+' '+thread.project+' · '+t('Plan')+' '+thread.name+' · '+thread.pending.length+' '+t('pending'));
+        const title=el('span',undefined,'messenger-thread-title');title.append(el('strong',thread.name));if(thread.pending.length)title.append(el('span',thread.pending.length,'messenger-count'));
+        row.append(el('small',t('Plan'),'messenger-field-label'),title,el('span',preview,'messenger-preview'),el('small',thread.pending.length?t(questionKind(thread.pending[0]))+' · '+t('Needs you'):t(thread.status||'Recorded history')));group.append(row);
+      }
+      inbox.append(group);
+    }
+    if(!shown.length)inbox.append(el('p',t(questionFilter==='open'?'No questions need your answer.':'No conversations match this filter.'),'messenger-empty'));
+    const conversation=el('div',undefined,'messenger-conversation');box.append(inbox,conversation);
+    if(!selected){conversation.append(el('p',t('Choose a plan conversation.'),'messenger-empty'));return;}
+    const head=el('header',undefined,'messenger-chat-head'),title=el('h2',selected.name);title.tabIndex=-1;title.id='conversation-title';
+    const filterLabel=t({open:'Needs you',all:'All',answered:'Completed'}[questionFilter]);
+    const back=button(t('Back to %s').replace('%s',filterLabel),()=>{conversationMobile=false;renderQuestionsPage();});back.className='messenger-back';
+    const identity=el('div',undefined,'messenger-identity'),projectIdentity=el('div',undefined,'messenger-project-identity'),planIdentity=el('div',undefined,'messenger-plan-identity');
+    projectIdentity.append(el('small',t('Project')),el('strong',selected.project));planIdentity.append(el('small',t('Plan')),title);identity.append(projectIdentity,planIdentity,el('small',t('View')+': '+filterLabel,'messenger-filter-context'));head.append(back,identity);
+    if(plans.some(row=>(row.project||row.apiary)===selected.project&&row.plan_path===selected.plan))head.append(button('Plan',()=>openQueuedPlan({project:selected.project,plan_path:selected.plan})));conversation.append(head);
+    const active=selected.pending.find(question=>Number(question.id)===questionFocus)||selected.pending[0];
+    if(active)questionFocus=Number(active.id);
+    const body=el('div',undefined,'messenger-chat-body');conversation.append(body);
+    const history=el('details',undefined,'messenger-history');history.append(el('summary',t('Recorded questions and answers')+' · '+selected.questions.length));
+    const timeline=el('div',undefined,'messenger-timeline');
+    for(const event of questionTimeline(selected.questions)){
+      const bubble=el('article',undefined,'messenger-message '+(event.type==='answer'?'messenger-answer':''));
+      const label=event.type==='answer'?(questionKind(event.question)==='Acceptance'&&!questionAnswered(event.question)?t('Latest saved note'):t('Answer')):t(questionKind(event.question))+' #'+event.question.id;
+      bubble.append(el('small',[label,event.type==='answer'?event.question.answered_by:'',event.at].filter(Boolean).join(' · ')));
+      const preview=event.text.split(/\r?\n/).find(line=>line.trim())||event.text;bubble.append(el('p',preview.slice(0,240)+(preview.length>240?'…':'')));
+      if(event.text!==preview||preview.length>240){const full=el('details');full.append(el('summary',t('Full text')),el('pre',event.text));bubble.append(full);}
+      if(event.type==='question' && (event.question.evidence||event.question.details_pending))bubble.append(questionEvidence(event.question));
+      if(event.type==='question' && event.question.recommendation){const recommendation=el('details');recommendation.append(el('summary',t('Recommendation')),el('pre',event.question.recommendation));bubble.append(recommendation);}
+      if(event.type==='answer' && event.question.owner_check_result)bubble.append(el('strong',t(event.question.owner_check_result==='accepted'?'Accepted':'Rejected')));
+      timeline.append(bubble);
+    }
+    history.append(timeline);
+    if(active){
+      const pending=el('div',undefined,'messenger-pending');
+      if(selected.pending.length>1){pending.append(el('label',selected.pending.length+' '+t('pending')+' · '+t('Choose the question to answer')));
+      const choose=el('select');choose.setAttribute('aria-label',t('Choose the question to answer'));
+      for(const question of selected.pending){const option=el('option','#'+question.id+' · '+t(questionKind(question))+' · '+String(question.text||question.question||question.item||'').split(/\r?\n/)[0].slice(0,100));option.value=question.id;choose.append(option);}choose.value=active.id;
+      choose.onchange=()=>{questionFocus=Number(choose.value);questionNavigation=true;renderQuestionsPage();};pending.append(choose);}
+
+      if(pending.children.length)body.append(pending);
+      const card=questionCard(active);card.className='question messenger-request';body.append(card);
+    }else body.append(el('p',t(selected.questions.length?'No open questions for this plan.':'No recorded questions.'),'messenger-empty'));
+    if(selected.questions.length)body.append(history);
+    if(questionNavigation){questionNavigation=false;title.focus({preventScroll:true});head.scrollIntoView({block:'start'});}
+  }
+  function renderQuestionsPage(){view.replaceChildren();renderQuestions();}
+  function renderUpdates() {
+    const box=$('update-status');box.replaceChildren();box.title='';
+    let label='',colour='dim';
+    if(updateState.waiting){label=t('Update waiting');colour='warn';box.title=[updateState.waiting.reason,...(updateState.waiting.jobs||[]).map(j=>[j.kind,j.name,j.project].filter(Boolean).join(' · '))].filter(Boolean).join('\n');}
+    else if(updateState.installing?.starting){label=t('Starting update to %s').replace('%s',displayVersion(updateState.installing.version));colour='warn';}
+    else if(updateState.installing){label=t('Installing update')+' '+displayVersion(updateState.installing.version || '');colour='warn';}
+    else if(updateState.failed){label=updateState.installError||t('update to %s failed, see STATUS').replace('%s',updateState.failed);colour='bad';}
+    else if(updateState.error){label=t('update check failed');colour='bad';}
+    else if(updateState.available?.version){label='';}
+    else if(updateState.no_release){label=t('no release published yet');}
+    else if(updateState.last_check){label=t('up to date');colour='ok';}
+    if(label)box.append(el('span',t(label),colour));
+    if(updateState.waiting)box.append(button('Force update',async()=>{await act('updates/force',{},t(bootstrap.forceWarning));}));
+    if(updateState.available?.version && !updateState.installing && !updateState.waiting)box.append(button(t('Update to %s').replace('%s',displayVersion(updateState.available.version)),async()=>{if(updateSubmitting)return;updateSubmitting=true;
+      const version=updateState.available.version;
+      try{await startUpdateInstall(client,version,state=>{updateRevision++;updateState={...updateState,...state};renderUpdates();},t(bootstrap.updateConfirm).replace('%s',version));}
+      finally{updateSubmitting=false;}
+    }));
+    const check=button('Check now',async()=>{const revision=updateRevision,value=await client.action('updates/check');if(value&&revision===updateRevision&&!updateSubmitting){updateState=value;renderUpdates();}});check.disabled=check.disabled||!!updateState.installing;check.classList.add('update-check');box.append(check);
+  }
+  async function loadEditor(project='') {
+    if(tab==='Projects' && !project){client.notice(t('Add Project'));renderEditor();return;}
+    const token=++generation, pageTab=tab;
+    client.notice('Loading…');
+    try {
+      const loaded=await client.request('settings/view'+(project?'?project='+encodeURIComponent(project):''));
+      if(token!==generation || pageTab!==tab)return;
+      editor={...loaded,project,dirty:false,storedKeys:Object.keys(loaded.data||{})};
+      if(!project)editor.data=mergeDefaults(bootstrap.general,editor.data);
+      client.notice('');render();
+    }catch(error){client.notice(error.message,true);}
+  }
+  function mergeDefaults(defaults, data) {
+    const out=copy(defaults);
+    for(const [key,value] of Object.entries(data || {}))out[key]=(value && typeof value==='object' && !Array.isArray(value) && out[key] && typeof out[key]==='object' && !Array.isArray(out[key]))?mergeDefaults(out[key],value):copy(value);
+    return out;
+  }
+  function renderEditor() {
+    if(tab==='Projects'){
+      const bar=el('div',undefined,'toolbar');bar.append(projectSelect(async value=>{if(editor?.dirty&&!await requestConfirm(t('Discard unsaved changes?')))return;await loadEditor(value);},editor?.project,false),
+        button('Add Project',addProject),button('Remove entry',async()=>{
+          if(!editor?.project)return;
+          const machine=await client.request('settings/view'),data=copy(machine.data);
+          data.projects=(data.projects || []).filter(project=>project.name!==editor.project);
+          await client.action('settings/save',{revision:machine.revision,data},t('Remove this Project from the settings?'));
+        }));view.append(bar);
+    }
     if(!editor){view.append(el('p',t(tab==='Projects' && !(client.state?.projects || []).length?'Add Project':'Loading…')));return;}
-
     const toolbar=el('div',undefined,'toolbar');view.append(toolbar);
-
     toolbar.append(button('Save',saveEditor),button('Reload',async()=>{if(!editor.dirty || await requestConfirm(t('Discard unsaved changes?')))return loadEditor(editor.project);}));
-
-    const form=section(tab), data=editor.data;
+    const form=section(({General:'System',Providers:'AI providers'})[tab]||tab), data=editor.data;
+    form.classList.add('settings-editor');
+    toolbar.classList.add('settings-savebar');
+    const impact=el('details',undefined,'settings-impact');impact.append(el('summary',t('When changes take effect')),el('p',t('Save applies to this page. Running agents keep their current configuration; new starts use saved settings.')));toolbar.append(impact);
+    if(tab==='General')impact.append(el('p',t('Web settings can reconfigure the web listener when saved. Resource limits apply at the next scheduling decision.')));
+    if(tab==='Git connections'){toolbar.hidden=true;form.append(el('p',t('Credentials are saved separately for each connection and shared across projects.')));}
 
     if(tab==='General'){
-
       const defaults=bootstrap.general;
-
       for(const [key,value] of Object.entries(defaults))if(!['providers','projects'].includes(key) && data[key]===undefined)data[key]=copy(value);
-
       if(editor.build){
-
         const build=el('fieldset');build.append(el('legend',t('Build')));
-
         const values={buildJobs:{...(typeof data.buildJobs==='object'?data.buildJobs:{}),...editor.build}};
-
-        fields(build,values.buildJobs,['buildJobs'],values);
-
+        fields(build,values.buildJobs,['buildJobs'],values,new Set(),false);
         for(const input of build.querySelectorAll('input,select'))input.addEventListener('change',()=>{
-
           const next=values.buildJobs;
-
           if(!Number.isInteger(next.cores)||next.cores<1||next.cores>editor.cores||!Number.isInteger(next.parallel)||next.parallel<1||next.minFreeRamGB<=0){client.notice(t('Invalid build settings'),true);return;}
-
           delete next.coreShare;delete next.fixed;data.buildJobs=copy(next);changed();
-
         });form.append(build);
-
       }
-
-      fields(form,data,[],data,new Set(['providers','projects','buildJobs']));
-
+      fields(form,data,[],data,new Set(['providers','projects','buildJobs',...(data.minFreeRamGB!==undefined?['ramReserveMb']:[])]));
       form.append(button('Install /bzz',async()=>{const job=await client.action('tools/install');if(job){job.title='Install /bzz';jobs.set(job.id,job);renderJob(job);}}));
-
+    } else if(tab==='Git connections') {
+      const git=el('details',undefined,'git-connections');git.append(el('summary',t('Git provider login')),
+        el('p',t('One access token is shared by all projects for each Git provider.')));form.append(git);
+      client.request('git-login/providers').then(providers=>{
+        if(!git.isConnected)return;
+        const grid=el('div',undefined,'git-connection-grid');git.append(grid);
+        for(const provider of providers){
+          const method={device:'Browser sign-in',bearer:'Browser sign-in',token:'Access token',pat:'Access token','existing access':'Existing access'}[provider.method] || provider.method || 'None';
+          const card=el('details',undefined,'git-connection');const summary=el('summary');summary.append(el('strong',provider.name),statusBadge(credentialStatus(provider)),el('span',t('Current method')+': '+t(method),'dim'));card.append(summary);
+          if(provider.error){card.append(el('p',provider.error,'bad'));grid.append(card);continue;}
+          if(provider.status_error)card.append(el('p',provider.status_error,'bad'));
+          const token=el('input');token.placeholder=t('Access token');token.type='password';token.autocomplete='off';token.setAttribute('aria-label',t('Access token'));
+          const origin=el('input');origin.placeholder=t('HTTPS server origin');origin.setAttribute('aria-label',t('HTTPS server origin'));if(provider.origin_required)card.append(origin);
+          card.append(token,button('Save access token',async()=>{await client.action('git-login/token',{provider:provider.name,token:token.value,...(provider.origin_required?{origin:origin.value}:{})});token.value='';render();}));
+          grid.append(card);
+        }
+      }).catch(error=>client.notice(error.message,true));
     } else if(tab==='Providers') {
-
-
       data.providers ||= [];
       editor.providerIndex=Math.min(editor.providerIndex||0,Math.max(0,data.providers.length-1));
       const layout=el('div',undefined,'provider-layout'),list=el('div',undefined,'provider-list');
@@ -1612,9 +1673,17 @@ function mount(document, bootstrap) {
         if(cliKey==='custom')selected(cli,customFields);
         const source=group(access==='subscription'?'Login':access==='api'?'API key':'Local LLM');
         const saved=!editor.dirty;
+        source.append(el('small',t('Save changes before using connection actions.')));
         const savedAction=(title,fn,parent=source,ready=true)=>{const node=button(title,fn);node.disabled=node.disabled||!saved||!ready;node.dataset.savedOnly='true';parent.append(node);return node;};
+        const cliUpdate=status?.cli_update;
+        if(cliUpdate){
+          const updateLine=el('p',undefined,cliUpdate.status==='update'?'provider-not-ready':'muted');
+          updateLine.textContent=cliUpdate.status==='update'?t('Update available')+' · '+cliUpdate.installed+' → '+cliUpdate.latest:cliUpdate.status==='current'?t('Up to date')+' · '+cliUpdate.installed:t(cliUpdate.message||'Version check unavailable');
+          cli.append(updateLine);
+        }
+        savedAction('Check for CLI updates',async()=>{await client.action('provider/updates',{provider:provider.name});},cli);
         if(access==='subscription'){
-          source.append(el('p',t(status?.logged_in?'Login present':'Login missing')));
+          source.append(statusBadge(loginStatus(status)));
           savedAction('Login',async()=>{const run=await client.action('login/start',{provider:provider.name});if(run){loginRuns.set(run.id,run);renderLogin(run);}});
           source.append(el('small',t('This login is shared by all providers with this CLI.')));
         }else{
@@ -1645,13 +1714,22 @@ function mount(document, bootstrap) {
           number.oninput=()=>{provider.capabilityThresholds ||= {};provider.capabilityThresholds[row.name]=number.value.trim()===''?'':Number(number.value);changed();};
           draw();capabilities.append(line);
         }
-        capabilities.append(button('Add own',()=>{const name=prompt(t('Capability name'));if(name?.trim()){provider.capabilities=effectiveCapabilities(provider);if(!provider.capabilities.includes(name.trim()))provider.capabilities.push(name.trim());provider.capabilitiesVersion=1;changed();render();}}));use.append(capabilities);
-
-
+        capabilities.append(button('Add own',async()=>{const name=await requestInput(t('Capability name'));if(name?.trim()){provider.capabilities=effectiveCapabilities(provider);if(!provider.capabilities.includes(name.trim()))provider.capabilities.push(name.trim());provider.capabilitiesVersion=1;changed();render();}}));use.append(capabilities);
+        const setup=group('Tool connections');
+        const verified=new Set(status?.mcp?.available||[]),native=new Set(['Coding','Queen','Build','Deploy','Confidential data']);
+        for(const capability of effectiveCapabilities(provider).filter(name=>!native.has(name))){
+          setup.append(el('p',capability+' · '+t(verified.has(capability)?'Verified':'Missing setup'),verified.has(capability)?'provider-ready':'provider-not-ready'));
+        }
+        const mcpForm=el('details');mcpForm.append(el('summary',t('MCP configuration')));setup.append(mcpForm);
+        const configuration=el('textarea');configuration.rows=8;configuration.setAttribute('aria-label',t('MCP configuration'));
+        configuration.placeholder='{"mcpServers": {}, "capabilities": {"3D modeling": {"server": "server-name", "tools": ["tool-name"]}}}';
+        configuration.value=editor.mcpDraft?.[provider.name]||'';
+        configuration.oninput=()=>{editor.mcpDraft ||= {};editor.mcpDraft[provider.name]=configuration.value;};mcpForm.append(configuration);
+        savedAction('Import and verify',async()=>{const value=JSON.parse(configuration.value);const job=await client.action('provider/mcp',{provider:provider.name,configuration:value},t('Import this configuration into the HaiveQueen CLI profile and start the supplied servers to verify their tools?'));if(job){jobs.set(job.id,job);renderJob(job);}},mcpForm);
         const advanced=el('details',undefined,'provider-advanced');advanced.append(el('summary',t('Advanced')));card.append(advanced);
         provider.allowedTools=toolsFromArgs(provider.args);
         selected(use,['contextLimit','beeMode']);
-        selected(advanced,['allowedTools','args',...(provider.protocol==='claude'?['claudeTools']:[])]);
+        selected(advanced,['args',...(provider.protocol==='claude'?['claudeTools']:[])]);
         const handled=new Set(['enabled','name','nameEdited','access','apiKey','address','contextWindow','slots','use','classes','limit','capabilities','capabilityThresholds','capabilitiesVersion','beeMode','contextLimit','allowedTools','args','claudeTools',...customFields]);
         fields(advanced,provider,path,data,handled);
         if(provider.limit&&typeof provider.limit==='object'){const limits=el('details');limits.append(el('summary',t('Usage check')));fields(limits,provider.limit,[...path,'limit'],data,new Set(['source']));advanced.append(limits);}
@@ -1661,357 +1739,331 @@ function mount(document, bootstrap) {
         if(measurements.length)advanced.append(valueView(measurements));
         const footer=el('div',undefined,'provider-footer');footer.append(button('Remove entry',async()=>{if(await requestConfirm(t('Remove entry')+'?')){data.providers.splice(index,1);editor.typeStash={};changed();render();}}));card.append(footer);
       }
-
     } else {
-
       editor.data=mergeDefaults({...bootstrap.project,...editor.project_defaults},data);
-
       if(data.upstreamRules===undefined && editor.upstream)editor.data.upstreamRules=editor.upstream.on;
-
       editor.place ||= {repository:editor.repository || '',plansFolder:''};
-
-      fields(form,editor.place,[],editor.place);
-
-      fields(form,editor.data,[],editor.data,new Set(['codeRepo','repo','rulesOff','upstreamRules']));
-
+      fields(form,editor.place,[],editor.place,new Set(),false);
+      workflowFields(form,editor.data,editor.git_workflow);
+      fields(form,editor.data,[],editor.data,new Set(['codeRepo','repo','rulesOff','upstreamRules','publishReleases','wayOfWorking','mergeMode','checkMode','buildMode','deployMode','releaseMode','checkEnabled','buildEnabled','deployEnabled','releaseEnabled','compileCheck','buildCommand','deployCommand','releaseFolder']));
       const knowledge=el('fieldset');knowledge.append(el('legend',t('Knowledge base')));
-
-      knowledge.append(el('p',t('The rule files every agent of this Project gets. A switched-off file is given to no agent.')));
-
+      knowledge.append(el('p',t('These files are supplied by HQ. A CLI may still load its own rules when HQ injection is disabled.')));
       for(const rule of editor.rules || []){
-
         const label=el('label',undefined,'field'),toggle=el('input');toggle.type='checkbox';toggle.checked=!(editor.data.rulesOff || []).includes(rule.label);
-
         toggle.onchange=()=>{const off=new Set(editor.data.rulesOff || []);if(toggle.checked)off.delete(rule.label);else off.add(rule.label);editor.data.rulesOff=[...off];changed();};
-
         let text=t('%s, %d tokens').replace('%s',rule.path).replace('%d',rule.tokens);
-
         if(rule.native_clis?.length)text+=' - '+t('still loaded by %s itself').replace('%s',rule.native_clis.join(' / '));
-
         label.append(el('span',text),toggle);knowledge.append(label);
-
       }
-
       if(!(editor.rules || []).length)knowledge.append(el('p',t('No AGENTS.md or CLAUDE.md is checked in to the repository.')));
-
       if(editor.upstream){
-
         const label=el('label',undefined,'field'),toggle=el('input');toggle.type='checkbox';toggle.checked=!!editor.data.upstreamRules;toggle.disabled=!editor.upstream.usable;
-
         toggle.onchange=()=>{editor.data.upstreamRules=toggle.checked;changed();};label.append(el('span',t(bootstrap.labels.upstreamRules)),toggle);knowledge.append(label);
-
         if(editor.upstream.note)knowledge.append(el('p',t(editor.upstream.note)));
-
       }
-
-      knowledge.append(el('p',t("HaiveQueen's own role texts are always added.")));form.prepend(knowledge);
-
+      knowledge.append(el('p',t("HaiveQueen's own role texts are always added.")));form.append(knowledge);
     }
-
+    organizeSettings(form);
     // The unsaved marker survives live dashboard reads.
-
     const marker=el('span',editor.dirty?t('Unsaved changes'):'');marker.id='dirty-marker';toolbar.append(marker);
-
   }
-
+  function organizeSettings(form) {
+    if(tab==='Git connections')return;
+    const host=tab==='Providers'?form.querySelector('.provider-form'):form;
+    if(!host)return;
+    const order=tab==='Projects'?['Basics','Workflow and checks','Agent rules','Git and cleanup','Advanced']:
+      tab==='Providers'?['Connection','Models and effort','Use and limits','Tools and MCP','Advanced']:
+      ['Basics','Resources','Agent control','Web access','Data and retention','Updates','Advanced'];
+    const sections=new Map(order.map(name=>{const box=el('section',undefined,'settings-category');box.dataset.category=name;box.setAttribute('aria-label',t(name));box.append(el('h3',t(name)));return [name,box];}));
+    const providerGroups={'Providers':'Connection','CLI':'Connection','Login':'Connection','API key':'Connection','Local LLM':'Connection','Models':'Models and effort','Use':'Use and limits','Tool connections':'Tools and MCP'};
+    for(const node of [...host.children]){
+      if(node.tagName==='H2')continue;
+      const heading=node.querySelector('legend,h3,summary')?.textContent;
+      const pathNode=node.matches?.('[data-path]')?node:node.querySelector('[data-path]');
+      const key=pathNode?JSON.parse(pathNode.dataset.path)[0]:null;
+      let category=tab==='Providers'?Object.keys(providerGroups).find(name=>t(name)===heading):null;
+      category=tab==='Providers'?(providerGroups[category]||'Advanced'):settingsCategory(tab,key);
+      if(tab==='Projects'){
+        if(node.classList.contains('workflow-settings'))category='Workflow and checks';
+        if(heading===t('Knowledge base'))category='Agent rules';
+        if(['repository','plansFolder','plans','planGlobs','planExclude'].includes(key))category='Basics';
+      }
+      if(tab==='General'&&heading===t('Build'))category='Resources';
+      if(node.classList.contains('provider-footer'))category='Advanced';
+      if(node.tagName==='BUTTON'&&node.textContent===t('Add setting')){
+        // Only the advanced category exposes raw configuration extensions.
+        if(sections.get('Advanced').querySelector('.settings-add')){node.remove();continue;}
+        node.classList.add('settings-add');
+      }
+      sections.get(category).append(node);
+    }
+    const navigation=el('nav',undefined,'settings-categories');navigation.setAttribute('aria-label',t('Settings sections'));
+    const search=el('input');search.type='search';search.className='settings-search';search.placeholder=t('Search settings');search.setAttribute('aria-label',t('Search settings'));search.value=editor.search||'';
+    const empty=el('p',t('No matching settings'),'settings-empty');empty.hidden=true;
+    const active=order.includes(editor.settingsCategory)?editor.settingsCategory:order[0];editor.settingsCategory=active;
+    const buttons=new Map();
+    const apply=()=>{
+      const query=search.value.trim().toLocaleLowerCase();let matches=0;
+      for(const [name,box] of sections){
+        const found=!query||box.textContent.toLocaleLowerCase().includes(query)||[...box.querySelectorAll('input,textarea')].some(input=>String(input.value).toLocaleLowerCase().includes(query));
+        box.hidden=query?!found:name!==(editor.settingsCategory||active);
+        if(!box.hidden){matches++;if(query)for(const details of box.querySelectorAll('details'))details.open=true;}
+        buttons.get(name).setAttribute('aria-pressed',String(!query&&!box.hidden));
+      }
+      empty.hidden=matches>0;
+    };
+    for(const [name,box] of sections){
+      const control=button(name,()=>{editor.settingsCategory=name;editor.search='';search.value='';apply();});buttons.set(name,control);navigation.append(control);
+      host.append(box);
+    }
+    search.oninput=()=>{editor.search=search.value;apply();};
+    host.prepend(navigation);host.prepend(search);host.append(empty);
+    if(tab==='Projects'){
+      const summary=el('p',workflowSummary(editor.data,t),'settings-workflow-summary');host.prepend(summary);
+      const source=el('p',t('Scope: this project. Models, agent resources and access are configured in AI providers and System.'),'settings-scope');host.prepend(source);
+    }else if(tab==='General')host.prepend(el('p',t('Scope: all projects on this installation.'),'settings-scope'));
+    const heading=host.querySelector(':scope > h2');if(heading)host.prepend(heading);
+    apply();
+  }
+  function workflowFields(parent,data,capabilities) {
+    const steps=[['merge','Merge'],['check','Check','compileCheck','Compile check command'],['build','Build','buildCommand','Build command'],['deploy','Deploy','deployCommand','Deploy command'],['release','Release','releaseFolder','Release folder']];
+    const group=el('fieldset',undefined,'workflow-settings');group.append(el('legend',t('Way of working')));
+    const supported=!!capabilities?.provider;
+    if(!supported)group.append(el('p',t('Git provider is not supported for this remote. Only Local is available.')));
+    const select=el('select');select.setAttribute('aria-label',t('Way of working'));
+    for(const [value,label] of [['local','Local'],['git','Git provider'],['custom','Custom']]){const option=el('option',t(label));option.value=value;if(value!=='local'&&!supported)option.disabled=true;select.append(option);}
+    select.value='custom';
+    const apply=el('button',t('Apply template'));apply.type='button';apply.onclick=()=>{if(select.value==='custom')return;data.wayOfWorking=select.value;for(const [step] of steps)data[step+'Mode']=select.value;changed();render();};
+    const overall=el('details',undefined,'workflow-overall');overall.append(el('summary',t('Apply execution template')),el('p',t('Replaces the location of every step. Enabled steps and commands are preserved.')),select,apply);group.append(overall);
+    for(const [step,label,field,fieldLabel] of steps){
+      const enabled=!field||!!data[step+'Enabled'];
+      const row=el('div',undefined,'workflow-step'+(enabled?'':' is-off'));row.dataset.workflowStep=step;row.setAttribute('role','group');row.setAttribute('aria-label',t(label));row.append(el('h3',t(label)));
+      if(field){const switchLabel=el('label',undefined,'workflow-switch'),toggle=el('input');toggle.type='checkbox';toggle.setAttribute('role','switch');toggle.checked=!!data[step+'Enabled'];toggle.setAttribute('aria-label',t(label+' on'));toggle.onchange=()=>{data[step+'Enabled']=toggle.checked;changed();render();};switchLabel.append(toggle,el('span',t(toggle.checked?'On':'Off')));row.append(switchLabel);}
+      else row.append(el('span',t('Always on'),'dim'));
+      const unavailable=supported&&data[step+'Mode']==='git'&&!capabilities.supported[step];
+      const mode=el('div',undefined,'workflow-location');mode.setAttribute('role','radiogroup');mode.setAttribute('aria-label',t(label+' location'));
+      for(const [value,text] of [['local','Local'],['git','Git provider']]){
+        const choice=el('button',t(text));choice.type='button';choice.dataset.mode=value;choice.setAttribute('role','radio');choice.setAttribute('aria-checked',String(data[step+'Mode']===value));choice.disabled=value==='git'&&(!supported||!capabilities.supported[step]);
+        choice.tabIndex=data[step+'Mode']===value||(value==='local'&&(!supported||unavailable))?0:-1;
+        const choose=(next,keyboard=false)=>{if(next==='git'&&(!supported||!capabilities.supported[step]))return;data[step+'Mode']=next;const modes=new Set(steps.map(([name])=>data[name+'Mode']));data.wayOfWorking=modes.size===1?[...modes][0]:'custom';changed();render();if(keyboard)view.querySelector('[data-workflow-step="'+step+'"] [data-mode="'+next+'"]')?.focus({preventScroll:true});};
+        choice.onclick=()=>choose(value);
+        choice.onkeydown=event=>{if(choice.disabled)return;let next;if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))next=value==='local'?'git':'local';else if(event.key==='Home')next='local';else if(event.key==='End')next='git';else return;event.preventDefault();choose(next,true);};
+        mode.append(choice);
+      }
+      mode.hidden=!enabled;row.append(mode);
+      const content=el('div',undefined,'workflow-command');row.append(content);
+      if(field && enabled && data[step+'Mode']!=='git'){const inputLabel=el('label',undefined,'workflow-field'),input=el('input');input.value=data[field]||'';input.dataset.path=JSON.stringify([field]);input.disabled=!data[step+'Enabled']||data[step+'Mode']==='git';input.required=!input.disabled;input.oninput=()=>{data[field]=input.value;changed();};inputLabel.append(el('span',t(fieldLabel)),input);content.append(inputLabel);}
+      const explanation=unavailable?'This provider does not support this step; it will be skipped.':field&&!data[step+'Enabled']?'Step is off; it will be skipped.':data[step+'Mode']==='git'?'Executed by the Git provider.':'Executed locally by HaiveQueen.';
+      content.append(el('small',t(explanation),'dim'));
+      group.append(row);
+    }
+    parent.append(group);
+  }
   async function addProject() {
-
     if(editor?.dirty&&!await requestConfirm(t('Discard unsaved changes?')))return;
-
     const machine=await client.request('settings/view');
-
     detail('Add Project',null);
-
     const form=el('form'),name=el('input'),repository=el('input'),plansFolder=el('input');
-
     for(const [node,title] of [[name,'Name'],[repository,'Repository'],[plansFolder,'Plans folder (empty: the repository)']]){
-
       const label=el('label',undefined,'field');label.append(el('span',t(title)),node);form.append(label);node.required=node!==plansFolder;
-
     }
-
     form.append(button('Save',async()=>{
-
       if(!form.reportValidity())return;
-
       const data=copy(machine.data);data.projects ||= [];
-
       data.projects.push({name:name.value.trim(),workspace:(plansFolder.value || repository.value).trim()});
-
       await client.action('settings/save',{revision:machine.revision,data});
-
       if(plansFolder.value.trim()){
-
         const project=name.value.trim(),loaded=await client.request('settings/view?project='+encodeURIComponent(project));
-
         await client.action('settings/save',{project,revision:loaded.revision,data:loaded.data,place:{repository:repository.value.trim(),plansFolder:plansFolder.value.trim()}});
-
       }
-
       $('detail').close();overlay=null;generation++;editor=null;await client.refresh();tab='Projects';await loadEditor(name.value.trim());
-
     }));form.onsubmit=event=>event.preventDefault();$('detail-body').append(form);
-
   }
-
   function newProvider(protocol='claude') {
-
     const {label,...preset}=bootstrap.presets[protocol] || {protocol,command:protocol,args:[]};
-
     return {...copy(preset),name:'',access:'subscription',enabled:true,slots:2,use:'preferred',capabilities:['Coding','Queen'],beeMode:preset.beeMode || 'process',
-
       apiKey:'',address:'',contextWindow:0,contextLimit:0,allowedTools:[],
-
-      classes:{light:{model:'',effort:'medium'},medium:{model:'',effort:'medium'},heavy:{model:'',effort:'medium'}},claudeTools:''};
-
+      classes:{light:{model:'',effort:'medium'},medium:{model:'',effort:'medium'},heavy:{model:'',effort:'high'}},claudeTools:''};
   }
-
   function changed() {editor.dirty=true;const marker=$('dirty-marker');if(marker)marker.textContent=t('Unsaved changes');for(const node of view.querySelectorAll('[data-saved-only]'))node.disabled=true;}
-
   function fields(parent, object, path, root, omit=new Set(), allowAdd=true, modelChoices=null) {
-
     for(const [name,value] of Object.entries(object)){
-
       if(['password','capabilitiesVersion'].includes(name)||omit.has(name))continue;
-
       const full=[...path,name];
-
       if(value && typeof value==='object' && !Array.isArray(value)){
-
-        const group=el('details');group.open=['web','classes','buildJobs'].includes(name);group.append(el('summary',pretty(name)));fields(group,value,full,root);parent.append(group);continue;
-
+        const group=el('details');group.open=['web','classes','buildJobs'].includes(name);group.append(el('summary',pretty(name)));fields(group,value,full,root,new Set(),false);parent.append(group);continue;
       }
-
       if(Array.isArray(value) && (value.some(item=>typeof item==='object') || ['providers','projects'].includes(name))){arrayEditor(parent,object,name,path,{},root);continue;}
-
-      const label=el('label',undefined,'field');label.append(el('span',t(bootstrap.fieldLabels?.[tab]?.[name] || bootstrap.labels[name] || pretty(name))));
-
+      const label=el('label',undefined,'field');label.append(el('span',t((tab==='General'&&path.length===0&&name==='minFreeRamGB'?'Minimum free RAM for agent starts (GiB)':null) || bootstrap.fieldLabels?.[tab]?.[name] || bootstrap.labels[name] || pretty(name))));
       const choices=bootstrap.choices[name] || (name==='access'?['subscription','api','llm']:name==='language'&&tab==='General'?['English','German']:null);
-
       let input;
-
       if(choices){input=el('select');for(const choice of [...new Set([...choices,value])]){const option=el('option',t(bootstrap.choiceLabels?.[name]?.[choice] || choice));option.value=choice;input.append(option);}input.value=value;}
-
       else if(Array.isArray(value)||String(value).includes('\n')){input=el('textarea');input.value=Array.isArray(value)?value.join('\n'):value;}
-
-      else {input=el('input');input.type=typeof value==='boolean'?'checkbox':typeof value==='number'?'number':/apiKey|providerKey/i.test(name)?'password':'text';if(input.type==='checkbox')input.checked=value;else input.value=value ?? '';if(input.type==='number')input.step='any';}
-
+      else {input=el('input');input.type=typeof value==='boolean'?'checkbox':typeof value==='number'?'number':/apiKey|providerKey/i.test(name)?'password':'text';if(input.type==='checkbox')input.checked=value;else input.value=value ?? '';if(input.type==='number')input.step='any';if(['cores','parallel','port','maxConcurrentCompileChecks'].includes(name)){input.min='1';input.step='1';input.required=true;}if(name==='port')input.max='65535';if(name==='slowTestSeconds'){input.required=true;}}
       input.oninput=input.onchange=()=>{let next=input.value;if(typeof value==='boolean')next=input.checked;else if(typeof value==='number'){if(!input.value.trim()||!Number.isFinite(Number(input.value)))return;next=Number(input.value);}else if(Array.isArray(value))next=name==='args'?input.value.split('\n'):input.value.split('\n').filter(x=>x!=='');setValue(root,full,next);
-
         if(path[0]==='providers'){
-
           const provider=root.providers[path[1]];
-
           if(name==='allowedTools'||name==='args'){
-
             const other=name==='allowedTools'?'args':'allowedTools';
-
             if(name==='allowedTools')provider.args=withTools(provider.args,next);else provider.allowedTools=toolsFromArgs(next);
-
             const otherPath=JSON.stringify(['providers',path[1],other]);
-
             const otherInput=[...view.querySelectorAll('[data-path]')].find(node=>node.dataset.path===otherPath);
-
             if(otherInput)otherInput.value=provider[other].join('\n');
-
           }
-
           if(name==='model'){
-
             const offered=modelChoices?.models || editor.provider_models?.[provider.name]?.models;
-
             if(Array.isArray(offered)){const entry=provider.classes[path[3]];if(offered.includes(next))delete entry.customModel;else entry.customModel=true;}
-
           }
-
         }
-
-        changed();};
-
+        label.querySelector('.settings-origin')?.remove();changed();};
       input.dataset.path=JSON.stringify(full);
-
       if(name==='model'||name==='effort'){
-
         const provider=path[0]==='providers'?root.providers[path[1]]:null;
-
         const offered=modelChoices || (provider?(editor.provider_models?.[provider.name] || {}):{});
-
         const items=name==='model'?offered.models:offered.efforts;
-
         if(items?.length){const list=el('datalist');list.id='choices-'+Math.random().toString(36).slice(2);for(const item of items){const option=el('option');option.value=typeof item==='string'?item:item.id||item.name;list.append(option);}input.setAttribute('list',list.id);label.append(list);}
-
       }
-
-      label.append(input);const help=bootstrap.fieldHelp?.[tab]?.[name] || bootstrap.help[name];if(help)label.append(el('small',t(help)));parent.append(label);
-
+      label.append(input);
+      if(path.length===0&&root===editor.data&&!editor.storedKeys?.includes(name)){
+        const origin=editor.project_defaults&&Object.hasOwn(editor.project_defaults,name)?'Repository default':'Application default';
+        label.append(el('small',t(origin),'settings-origin'));
+      }
+      const help=(tab==='General'&&path.length===0&&name==='minFreeRamGB'?'Overrides the legacy agent RAM reserve; independent of the build RAM threshold.':null) || bootstrap.fieldHelp?.[tab]?.[name] || bootstrap.help[name] || bootstrap.defaultHelp?.[tab];if(help)label.append(el('small',t(help)));parent.append(label);
     }
-
     if(!allowAdd)return;
-    const add=button('Add setting',()=>{
-
-      const name=prompt(t('Setting name'));if(!name || ['__proto__','constructor','prototype','password'].includes(name) || Object.hasOwn(object,name))return;
-
-      const value=prompt(t('Value (JSON, or plain text)'));if(value===null)return;
-
+    const add=button('Add setting',async()=>{
+      const name=await requestInput(t('Setting name'));if(!name || ['__proto__','constructor','prototype','password'].includes(name) || Object.hasOwn(object,name))return;
+      const value=await requestInput(t('Value (JSON, or plain text)'));if(value===null)return;
       let parsed;try{parsed=JSON.parse(value);}catch{parsed=value;}
-
       object[name]=parsed;changed();render();
-
     });parent.append(add);
-
   }
-
   function arrayEditor(parent,object,name,path,template,root) {
-
     object[name] ||= [];
-
     const group=el('details');group.append(el('summary',pretty(name)));
-
     object[name].forEach((item,index)=>{const card=el('fieldset');fields(card,item,[...path,name,index],root);card.append(button('Remove entry',()=>{object[name].splice(index,1);changed();render();}));group.append(card);});
-
     group.append(button(name==='projects'?'Add Project':'Add entry',()=>{object[name].push(copy(template));changed();render();}));parent.append(group);
-
   }
-
   async function saveEditor() {
-
     const current=editor;
-    for(const input of view.querySelectorAll('.capability-threshold input[type="number"]'))if(!input.disabled && !input.reportValidity())return;
-
+    for(const input of view.querySelectorAll('input,select,textarea'))if(!input.disabled && !input.checkValidity()){
+      const category=input.closest('.settings-category');if(category){for(const box of view.querySelectorAll('.settings-category'))box.hidden=box!==category;editor.settingsCategory=category.dataset.category;}
+      for(let parent=input.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;
+      input.reportValidity();return;
+    }
     const sent=JSON.stringify([current.data,current.place]);
-
     const data=copy(current.data);
-
     if(!current.project)for(const provider of data.providers || []){
       delete provider.allowedTools;
       if((provider.access||'subscription')!=='llm'){delete provider.address;delete provider.contextWindow;delete provider.server;}
       if((provider.access||'subscription')==='subscription')delete provider.apiKey;
     }
-
     const loaded=await client.action('settings/save',{project:current.project || undefined,revision:current.revision,data,...(current.project?{place:current.place}:{})});
-
     if(!loaded)return;
-
     if(current!==editor)return;
-
     if(JSON.stringify([current.data,current.place])!==sent){current.revision=loaded.revision;current.dirty=true;client.notice(t('Saved. Newer edits are still unsaved.'));return;}
-
-    editor={...loaded,project:current.project,dirty:false,rules:current.rules,upstream:current.upstream,workspace:current.workspace,place:current.place,project_defaults:current.project_defaults,provider_models:current.provider_models,benchmark:current.benchmark,build:current.build,cores:current.cores};
-
+    editor={...loaded,project:current.project,settingsCategory:current.settingsCategory,search:current.search,storedKeys:Object.keys(loaded.data||{}),dirty:false,rules:current.rules,upstream:current.upstream,workspace:current.workspace,place:current.place,project_defaults:current.project_defaults,git_workflow:current.git_workflow,provider_models:current.provider_models,benchmark:current.benchmark,build:current.build,cores:current.cores};
     if(!current.project && current.data.language && current.data.language!==bootstrap.language){location.reload();return;}
-
     render();void client.refresh();
-
-    if(current.data.web)client.notice(t('Saved. Restart the web server to apply changed web settings.'));
-
+    client.notice(t(current.data.web?'Saved. Applying web settings.':'Saved.'));
   }
-
   async function openLive(row) {
-
     const project=row.project || row.apiary,agent=row.agent || row.name,id=JSON.stringify([project,agent]);
-
     if(liveRuns.has(id))return;
-
-    const panel=el('section',undefined,'live-panel'),title=el('h2',project+' · '+agent),output=el('pre',undefined,'live-output');
-
-    panel.append(title,button('Close',()=>{liveRuns.delete(id);panel.remove();}),output);$('live').append(panel);panel.scrollIntoView({block:'nearest',behavior:'smooth'});
-
-    liveRuns.set(id,{project,agent,output,loading:false,initial:true});await pollLive(liveRuns.get(id));
-
+    const panel=el('section',undefined,'live-panel'),title=el('h2',project+' · '+agent),activity=el('div',undefined,'live-activity'),output=el('pre',undefined,'live-output');activity.hidden=true;
+    panel.append(title,button('Close',()=>{liveRuns.delete(id);panel.remove();}),activity,output);$('live').append(panel);panel.scrollIntoView({block:'nearest',behavior:'smooth'});
+    liveRuns.set(id,{project,agent,activity,output,loading:false,initial:true});await pollLive(liveRuns.get(id));
   }
-
   async function pollLive(run) {
-
     if(run.loading || !run.output.isConnected)return;run.loading=true;
-
     try{const result=run.kind==='orch'?{lines:(client.state.log||[]).filter((line,index)=>{const meta=client.state.log_meta?.[index]||{};return meta.project===run.project && meta.hive===run.hive;}).map(line=>['text',line.join(' ')])}:await client.request('live?'+new URLSearchParams({project:run.project,agent:run.agent}));const follow=run.initial || run.output.scrollHeight-run.output.scrollTop-run.output.clientHeight<25;
-
+      renderLiveActivity(run,result.activity);
       run.output.replaceChildren();for(const [colour,text] of result.lines){run.output.append(el('div',text,colour));}if(!result.lines.length)run.output.append(el('span',t('No live output yet.')));if(follow)run.output.scrollTop=run.output.scrollHeight;run.initial=false;
-
     }catch(error){if(run.output.isConnected)run.output.textContent=error.message;}finally{run.loading=false;}
-
   }
-
   function renderLogin(run) {
-
     let panel=$('login-'+run.id);
-
-    if(!panel){panel=el('section',undefined,'live-panel');panel.id='login-'+run.id;panel.append(el('h2',run.provider+' · '+t('Login')),el('pre'),el('div'));const form=el('form'),input=el('input');input.setAttribute('aria-label',t('Code or input'));input.autocomplete='off';const send=el('button',t('Send'));send.type='submit';form.append(input,send);form.onsubmit=async event=>{event.preventDefault();await runButton(send,async()=>{await client.action('login/input',{id:run.id,text:input.value});input.value='';});};panel.append(form);$('live').append(panel);}
-
+    if(!panel){panel=el('section',undefined,'live-panel');panel.id='login-'+run.id;panel.append(el('h2',run.provider+' · '+t('Login')),el('pre'),el('div',undefined,'login-links'));const form=el('form'),input=el('input');input.setAttribute('aria-label',t('Code or input'));input.autocomplete='off';const send=el('button',t('Send'));send.type='submit';form.append(input,send);form.onsubmit=async event=>{event.preventDefault();await runButton(send,async()=>{await client.action('login/input',{id:run.id,text:input.value});input.value='';});};panel.append(form);$('live').append(panel);}
     panel.querySelector('pre').textContent=run.output;
-
-    const links=panel.querySelector('div');links.replaceChildren();
-
+    const links=panel.querySelector('.login-links');links.replaceChildren();
     for(const url of safeLinks(run.links || [])){const link=el('a',url);link.href=url;link.target='_blank';link.rel='noopener noreferrer';links.append(link,el('br'));}
-
-    panel.querySelector('input').disabled=!run.running;panel.querySelector('button').disabled=!run.running;
-
+    panel.querySelector('input').disabled=!run.running;panel.querySelector('form button').disabled=!run.running;
     if(!run.running){links.append(el('p',t('Login finished')+' ('+run.exit+')'));panel.append(button('Close',()=>{panel.remove();loginRuns.delete(run.id);}));}
-
   }
-
-  function renderJob(job) {
-
-    let panel=$('job-'+job.id);if(!panel){panel=el('section');panel.id='job-'+job.id;$('live').append(panel);}
-
-    panel.replaceChildren(el('h2',t(job.title || 'Benchmark Start Context')),valueView(job));
-
-    if(!job.running)panel.append(button('Close',()=>{jobs.delete(job.id);panel.remove();}));
-
-  }
-
-  async function refreshLists() {
-
-    const tasks=[];
-
-    if(tab==='Plans'&&!planLoading){planLoading=true;tasks.push(client.request('plans').then(value=>{plans=value;if(tab==='Plans')render();}).finally(()=>planLoading=false));}
-
-    if(tab==='Questions'&&!questionLoading){questionLoading=true;tasks.push(client.request('questions').then(value=>{
-
-      if(JSON.stringify(questions)!==JSON.stringify(value)){// Keep drafts for surviving questions during a live update.
-
-        const drafts=new Map([...view.querySelectorAll('[data-question]')].map(card=>[Number(card.dataset.question),{text:card.querySelector('textarea').value,checked:card.querySelector('input[type=checkbox]').checked,packages:card.querySelector('input:not([type=checkbox])')?.value}]));
-
-        questions=value;if(tab==='Questions'){render();for(const card of view.querySelectorAll('[data-question]')){const draft=drafts.get(Number(card.dataset.question));if(draft){card.querySelector('textarea').value=draft.text;card.querySelector('input[type=checkbox]').checked=draft.checked;const packages=card.querySelector('input:not([type=checkbox])');if(packages)packages.value=draft.packages||'';}}}
-
+  function renderJob(job,historical=false,history=null) {
+    if(job.key?.startsWith('release-promotion:') && (!historical || job.running || job.result?.pending)){
+      const project=job.key.slice('release-promotion:'.length),previous=releasePromotions.get(project);
+      if(!previous||previous.id===job.id||Number(job.started)>=Number(previous.started)){
+        job.source_tag=job.source_tag||job.result?.source_tag||previous?.source_tag;
+        releasePromotions.set(project,job);
+        if(tab==='Releases')render();
+        if(job.result?.files&&!previous?.result?.files&&project===releaseProject)void loadReleases(true);
       }
-
-    }).finally(()=>questionLoading=false));}
-
-    if(tab==='Providers'&&!providerLoading){providerLoading=true;tasks.push(client.request('providers').then(value=>{if(JSON.stringify(value)!==JSON.stringify(providerStates)){providerStates=value;if(tab==='Providers'&&!editor?.dirty)render();}}).finally(()=>providerLoading=false));}
-
-    if(tab==='Dashboard'&&!updateLoading){updateLoading=true;tasks.push(client.request('updates').then(value=>{updateState=value;renderUpdates();}).finally(()=>updateLoading=false));}
-
-    await Promise.allSettled(tasks).then(results=>{for(const result of results)if(result.status==='rejected')client.notice(result.reason.message,true);});
-
-  }
-
-  async function tick() {
-
-    if(!automaticChecking && Date.now()-lastAutomaticCheck>60000){
-
-      lastAutomaticCheck=Date.now();automaticChecking=true;
-
-      void client.request('updates/check',{automatic:true}).then(value=>{if(value)updateState=value;}).catch(error=>client.notice(error.message,true)).finally(()=>automaticChecking=false);
-
+      return;
     }
-
-    await Promise.allSettled([client.refresh(),refreshLists(),...Array.from(liveRuns.values(),pollLive),
-
-      ...Array.from(loginRuns.values()).filter(run=>run.running&&!run.loading).map(async run=>{run.loading=true;try{const next=await client.request('login/status?id='+encodeURIComponent(run.id));loginRuns.set(run.id,next);renderLogin(next);if(!next.running){providerStates=await client.request('providers');if(tab==='Providers'&&!editor?.dirty)render();}}catch(error){client.notice(error.message,true);}finally{run.loading=false;}}),
-
-      ...Array.from(jobs.values()).filter(job=>job.running&&!job.loading).map(async job=>{job.loading=true;try{const next=await client.request('jobs/status?id='+encodeURIComponent(job.id));next.title=job.title;jobs.set(job.id,next);renderJob(next);}finally{job.loading=false;}})]);
-
+    if(historical&&!job.running&&!history)return;
+    let panel=$('job-'+job.id);if(!panel){panel=el('section');panel.id='job-'+job.id;(historical&&!job.running?history:$('live')).append(panel);}
+    panel.className='owner-action-summary';
+    const [kind,...parts]=String(job.key||'').split(':'),project=parts.join(':');
+    const label=({'release-promotion':'Release publication',mcp:'Provider setup',benchmark:'Provider benchmark',tools:'Tool installation'})[kind]||'Owner action';
+    const title=t(label)+(project&&kind!=='tools'?' · '+project:'');
+    const status=job.running?t('Running'):job.error?t('Failed'):
+      kind==='release-promotion'?t('Publication requested; confirmation is available in Releases.'):t('Completed');
+    const header=el('div',undefined,'owner-action-heading');header.append(el('strong',title),el('span',status,job.error?'bad':job.running?'warn':'dim'));
+    panel.replaceChildren(header);
+    const stamp=Number(job.ended||job.started);
+    if(Number.isFinite(stamp)&&stamp>0)panel.append(el('small',new Date(stamp*1000).toLocaleString(),'dim'));
+    if(job.running&&job.progress)panel.append(el('p',job.progress));
+    if(job.error)panel.append(button('Error details',()=>detail(title,String(job.error))));
+    if(kind==='release-promotion'){
+      if(job.result?.tag)panel.append(el('span',job.result.tag,'owner-action-tag'));
+      panel.append(button('Releases',()=>selectTab('Releases',project)));
+    }
+    if(!job.running)panel.append(button('Close',()=>{jobs.delete(job.id);panel.remove();}));
   }
-
-  window.addEventListener('beforeunload',event=>{if(editor?.dirty){event.preventDefault();event.returnValue='';}});
-
-  render();void tick();setInterval(()=>void tick(),2000);
-
+  async function refreshLists() {
+    const tasks=[];
+    if(['Plans','Questions'].includes(tab)&&!planLoading){planLoading=true;tasks.push(client.request('plans').then(value=>{const changed=!plansLoaded||JSON.stringify(plans)!==JSON.stringify(value);plansLoaded=true;if(changed){plans=value;if(['Plans','Questions'].includes(tab))render();}}).finally(()=>planLoading=false));}
+    if(['Questions','Plans'].includes(tab)&&!questionLoading){questionLoading=true;tasks.push(client.request('questions?history=1&compact=1').then(value=>{
+      const changed=!questionsLoaded||JSON.stringify(questions)!==JSON.stringify(value);questionsLoaded=true;if(changed){questions=value;if(['Questions','Plans'].includes(tab))render();}
+    }).finally(()=>questionLoading=false));}
+    if(tab==='Providers'&&!providerLoading){providerLoading=true;tasks.push(client.request('providers').then(value=>{if(JSON.stringify(value)!==JSON.stringify(providerStates)){providerStates=value;if(tab==='Providers'&&!editor?.dirty)render();}}).finally(()=>providerLoading=false));}
+    if(!updateLoading&&!updateSubmitting){updateLoading=true;const revision=updateRevision;tasks.push(client.request('updates').then(value=>{if(revision===updateRevision){updateState=value;renderUpdates();}}).finally(()=>updateLoading=false));}
+    await Promise.allSettled(tasks).then(results=>{for(const result of results)if(result.status==='rejected')client.notice(result.reason.message,true);});
+  }
+  async function pollReleasePromotions(){
+    for(const [project,job] of releasePromotions){
+      if(job.running||!job.result?.pending||job.publication?.state==='published'||job.publication?.state==='failed'||job.verifying||Date.now()-(job.checkedAt||0)<10000)continue;
+      job.verifying=true;job.checkedAt=Date.now();
+      try{
+        job.publication=await client.request('releases/promotion-status?'+new URLSearchParams({project,id:job.id}));
+        job.verificationError='';
+        if(job.publication.state==='published'&&project===releaseProject)await loadReleases(true);
+      }catch(error){job.verificationError=error.message;}
+      finally{job.verifying=false;if(tab==='Releases'&&project===releaseProject)render();}
+    }
+  }
+  async function tick() {
+    void pollReleasePromotions();
+    if(!automaticChecking && Date.now()-lastAutomaticCheck>60000){
+      lastAutomaticCheck=Date.now();automaticChecking=true;
+      const revision=updateRevision;void client.request('updates/check',{automatic:true}).then(value=>{if(value&&revision===updateRevision&&!updateSubmitting){updateState=value;renderUpdates();}}).catch(error=>client.notice(error.message,true)).finally(()=>automaticChecking=false);
+    }
+    await Promise.allSettled([client.refresh(),refreshLists(),...Array.from(liveRuns.values(),pollLive),
+      ...Array.from(loginRuns.values()).filter(run=>run.running&&!run.loading).map(async run=>{run.loading=true;try{const next=await client.request('login/status?id='+encodeURIComponent(run.id));loginRuns.set(run.id,next);renderLogin(next);if(!next.running){providerStates=await client.request('providers');if(tab==='Providers'&&!editor?.dirty)render();}}catch(error){client.notice(error.message,true);}finally{run.loading=false;}}),
+      ...Array.from(jobs.values()).filter(job=>job.running&&!job.loading).map(async job=>{job.loading=true;try{const next=await client.request('jobs/status?id='+encodeURIComponent(job.id));next.title=job.title;jobs.set(job.id,next);renderJob(next);}finally{job.loading=false;}})]);
+  }
+  window.addEventListener('beforeunload',event=>{if(editor?.dirty || planDraft?.dirty || [...questionDrafts.values()].some(draft=>draft.text||draft.packages)){event.preventDefault();event.returnValue='';}});
+  if(typeof MutationObserver!=='undefined')installCopyButtons(document,window.navigator,t,(...args)=>client.notice(...args));
+  render();
+  void client.request('jobs/status').then(history=>{
+    const previous=el('details');previous.append(el('summary',t('Previous owner actions')));
+    for(const job of history){if(!jobs.has(job.id)){jobs.set(job.id,job);renderJob(job,true,previous);}}
+    ownerHistory=previous;
+    if(tab==='Logs')render();
+  }).catch(error=>client.notice(error.message,true));
+  void tick();setInterval(()=>void tick(),2000);
   return client;
-
 }
-
-if(typeof module!=='undefined')module.exports={dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
-
+if(typeof module!=='undefined')module.exports={startUpdateInstall,releaseCardState,startReleasePromotion,releaseJobStatus,QuestionDetails,settingsCategory,workflowSummary,testTimingNotice,LogPager,dashboardLoading,hiveTree,pendingQueue,planProcessGroups,credentialStatus,loginStatus,copyOutput,installCopyButtons,dashboardPlanHeight,orchestrationFor,dashboardMetrics,dashboardRows,Client,RenderGate,planActions,resolvePlanActions,setValue,safeLinks,toolsFromArgs,withTools,orchestratorDisabled,capabilityRows,isPackagePlaceholder,hiveCounts,visibleHiveRows,providerCli,applyProviderCli,switchProviderAccess,mount};
 if(typeof document!=='undefined')mount(document,JSON.parse(document.getElementById('bootstrap').textContent));

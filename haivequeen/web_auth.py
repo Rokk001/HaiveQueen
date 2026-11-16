@@ -6,7 +6,7 @@ import secrets
 from . import filetxn, settings
 
 _DEFAULTS = {'address': '0.0.0.0', 'port': 8484, 'certificate': '', 'key': '',
-             'network': False, 'username': '', 'password': ''}
+             'trustedProxies': [], 'network': False, 'username': '', 'password': ''}
 _ITERATIONS = 600_000
 
 

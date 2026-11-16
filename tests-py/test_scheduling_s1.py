@@ -16,6 +16,12 @@ ROOT = Path(__file__).resolve().parent.parent
 class SlotAndProviderChoiceTests(RoundCase):
     """Database-backed rounds and Agent starts."""
 
+    def setUp(self):
+        super().setUp()
+        from bzztest import verified_tool_evidence
+        verified_tool_evidence(self, {'codex': ['Image generation'], 'gemini': ['Image generation']})
+
+
     def limits(self, **used):
         """Make the quota reserve of the providers known: name -> used percent, all with the same reset."""
         path = self.base / 'limits.json'
@@ -82,7 +88,8 @@ class SlotAndProviderChoiceTests(RoundCase):
         with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), mock.patch('haivequeen.loop._do_start', return_value=True) as start:
             self.assertFalse(bees.start_process(self.env(), REL, 'P1', 'Bea', 'medium', 'task', ['one'], [], [], cwd=str(wt)))
         start.assert_not_called()
-        self.assertIn('no provider with a free slot', bees.LAST_REFUSAL)
+        self.assertIn('claude: all 1 slots occupied (free slots 0/1)', bees.LAST_REFUSAL)
+        self.assertIn('codex: all 1 slots occupied (free slots 0/1)', bees.LAST_REFUSAL)
         self.assertFalse(bees.unconfirmed_embedded(self.conn, 'testproj', REL))
 
     # A subagent Bee on the Queen's own provider needs a free slot of it.
@@ -256,6 +263,7 @@ class SlotAndProviderChoiceTests(RoundCase):
 
     # A package of a class only another provider offers reserves that provider's slot: the new Queen takes the Queen provider's slot.
     def test_reservation_takes_a_slot_of_a_provider_with_the_class(self):
+        self.machine['queenClass'] = 'medium'  # Explicit class for this provider-routing scenario.
         self.machine['providers'] = [provider('claude', 2, classes=('light', 'medium')), provider('codex', 1, proto='codex')]
         self.running_queen([{'id': 'P1', 'title': 'Heavy', 'class': 'heavy'}])
         other = self.other_ready_plan()
@@ -286,31 +294,31 @@ class SlotAndProviderChoiceTests(RoundCase):
 
 
 class SlotTextTests(unittest.TestCase):
-    """README, owner question texts and the Queen role text describe the slot and routing rules."""
+    """Provider guide, owner question texts and the Queen role text describe the slot and routing rules."""
 
     def texts(self):
-        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+        providers = (ROOT / 'docs/PROVIDERS.md').read_text(encoding='utf-8')
         queen = roles.role_text('queen')
         german = '\n'.join('%s\n%s' % (k, v) for k, v in i18n.GERMAN.items()) if hasattr(i18n, 'GERMAN') else ''
-        return readme, queen, german
+        return providers, queen, german
 
     def test_texts_no_longer_promise_free_subagents_or_fixed_providers(self):
-        readme, queen, german = self.texts()
-        for text in (readme, queen, german):
+        providers, queen, german = self.texts()
+        for text in (providers, queen, german):
             self.assertNotIn('no extra slot', text)
             self.assertNotIn('need no slot of their own', text)
             self.assertNotIn('keinen eigenen Slot', text)
         self.assertNotIn('never silently change it', queen)
         self.assertNotIn('restart its package with the same class and provider', queen)
-        self.assertNotIn('Queen plus an Agent process', readme)
-        self.assertNotIn('restart the Queen (on the same provider', readme)
+        self.assertNotIn('Queen plus an Agent process', providers)
+        self.assertNotIn('restart the Queen (on the same provider', providers)
 
     def test_texts_describe_slots_and_provider_choice(self):
-        readme, queen, _ = self.texts()
-        self.assertIn('every Agent takes one slot', readme)
+        providers, queen, _ = self.texts()
+        self.assertIn('every Agent takes one slot', providers)
         self.assertIn('every Agent takes one slot', queen)
         self.assertIn('another provider', queen)
-        self.assertIn('chooses its provider by the normal provider choice', readme)
+        self.assertIn('chooses its provider by the normal provider choice', providers)
 
 
 if __name__ == '__main__':

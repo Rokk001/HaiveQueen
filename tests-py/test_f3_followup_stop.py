@@ -30,13 +30,17 @@ class OwnerStopTest(SelfUpdateBase):
     def run_worker(self, git, round_done=True, alive=None, loop_pid=None):
         """Start run_update in a thread with its own connection; returns (thread, result dict)."""
         out = {}
+        self.waiting = threading.Event()
+        def observe_wait(_seconds):
+            self.waiting.set()
+            threading.Event().wait(.005)
 
         def work():
             """The worker thread."""
             conn = db.connect(Path(self.tmp.name) / "haivequeen.db")
             git.conn = conn if round_done else None
             try:
-                out["res"] = selfupdate.run_update(conn, live=self.live, run=git, sleep=lambda s: time.sleep(0.005), poll=0.01, round_timeout=20.0,
+                out["res"] = selfupdate.run_update(conn, live=self.live, run=git, sleep=observe_wait, poll=0.01, round_timeout=20.0,
                                                    alive=alive, loop_pid=loop_pid)
             finally:
                 conn.close()
@@ -57,7 +61,7 @@ class OwnerStopTest(SelfUpdateBase):
         git = FakeGit()
         t, out = self.run_worker(git, alive=lambda pid: True, loop_pid=lambda: 0)
         self.wait_for(lambda: loop.stop_flag().exists())
-        time.sleep(0.1)
+        self.assertTrue(self.waiting.wait(5), "worker did not reach its wait")
         owner_stop()
         t.join(10)
         self.assertFalse(t.is_alive())
@@ -73,7 +77,7 @@ class OwnerStopTest(SelfUpdateBase):
         git = FakeGit()
         t, out = self.run_worker(git, round_done=False, alive=lambda pid: False, loop_pid=lambda: 4242 if git.started else 0)
         self.wait_for(lambda: git.started)
-        time.sleep(0.1)
+        self.assertTrue(self.waiting.wait(5), "worker did not reach its wait")
         owner_stop()
         t.join(10)
         self.assertFalse(t.is_alive())

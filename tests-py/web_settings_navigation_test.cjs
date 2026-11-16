@@ -1,0 +1,16 @@
+const assert=require('node:assert/strict');
+const ui=require('../haivequeen/web-client.js');
+assert.equal(typeof ui.settingsCategory,'function');
+assert.equal(ui.settingsCategory('Projects','name'),'Basics');
+assert.equal(ui.settingsCategory('Projects','integrationBranch'),'Git and cleanup');
+assert.equal(ui.settingsCategory('General','ramReserveMb'),'Resources');
+assert.equal(ui.settingsCategory('General','web'),'Web access');
+assert.equal(ui.settingsCategory('General','unknownExtension'),'Advanced');
+assert.equal(ui.workflowSummary({checkEnabled:true,checkMode:'git',integrationBranch:'main'}),'Merge: Local → Check: Git provider → Push: main');
+assert.equal(ui.workflowSummary({checkEnabled:false,buildEnabled:false}),'Merge: Local → Push: default branch');
+const fs=require('node:fs');const source=fs.readFileSync(require.resolve('../haivequeen/web-client.js'),'utf8');
+assert(source.includes("tab==='Git connections'"),'Git connections need their own page');
+assert(source.includes('settings-search'),'Search missing');
+assert(source.includes("input.reportValidity()"),'Field validation missing');
+assert(!source.includes("selected(advanced,['allowedTools','args'"),'Duplicate tool editors remain');
+console.log('Settings categories, workflow summary and editor contracts passed');

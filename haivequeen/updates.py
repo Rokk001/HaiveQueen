@@ -4,12 +4,13 @@ default 24 h, 0 switches the daily check off) and when the owner presses "Check 
 On confirmation the detached self-update worker installs the release: it stops the loop, waits until no agent of any Project runs (no Queen or Agent
 starts meanwhile), fast-forwards the install folder to the release tag, installs the package again when pyproject.toml changed and starts
 HaiveQueen again. The result of the last check is kept in update-check.json of the data folder, so a restart neither forgets an offer nor asks early.
-The installed version is the release tag of the install folder (pyproject.toml without one).
+The installed version comes only from reachable stable Git tags; without one it is 0.0.0.
 """
 import json
 import os
 import re
-import tomllib
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -33,6 +34,40 @@ TEXT_NO_RELEASE = N_("no release published yet")
 
 # ---- persisted state ----
 
+_state_mutex = threading.RLock()
+
+
+@contextmanager
+def _state_lock():
+    """Serialize short state transactions across threads and processes."""
+    with _state_mutex:
+        path = state_path().with_suffix('.lock')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'a+b') as handle:
+            if handle.tell() == 0:
+                handle.write(b'0')
+                handle.flush()
+            handle.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                if os.name == 'nt':
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _write_state(state):
+    from .filetxn import atomic_write
+    atomic_write(state_path(), json.dumps(state, indent=1).encode('utf-8'))
+
 def state_path() -> Path:
     """The file that keeps the result of the last check and a started install."""
     return osplat.data_dir() / STATE_FILE
@@ -47,13 +82,27 @@ def load_state() -> dict:
         return {}
 
 
+def display_state():
+    """Hide superseded offers/failures without rewriting installation history."""
+    state = dict(load_state())
+    current = tuple(map(int, installed_version().split('.')))
+    def older(value, inclusive=False):
+        match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', str(value or ''))
+        if not match:
+            return False
+        version = tuple(map(int, match.groups()))
+        return version <= current if inclusive else version < current
+    if not state.get('installing') and older(state.get('failed')):
+        state.pop('failed', None)
+    if older((state.get('available') or {}).get('version'), inclusive=True):
+        state['available'] = None
+    return state
+
+
 def save_state(state: dict) -> None:
     """Write the state atomically."""
-    path = state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + ".tmp")
-    temp.write_text(json.dumps(state, indent=1), encoding="utf-8")
-    os.replace(temp, path)
+    with _state_lock():
+        _write_state(state)
 
 
 # ---- settings ----
@@ -86,7 +135,11 @@ def repository(machine, live=None, run=None) -> str:
 
 
 def installed_version(live=None, run=None) -> str:
-    """The installed version: the nearest release tag vX.Y.Z of the commit of the install folder, else the version of its pyproject.toml, else '–'."""
+    """Highest stable version tag reachable from this checkout, or 0.0.0.
+
+    Package metadata is not an installed-release identity. Ignore prerelease,
+    malformed and unrelated-branch tags without hiding earlier stable tags.
+    """
     from . import selfupdate
     run = run or selfupdate.run_command
     live = Path(live or selfupdate.live_folder())
@@ -96,20 +149,30 @@ def installed_version(live=None, run=None) -> str:
             return release
     except (OSError, UnicodeError):
         pass
-    code, out = run(["git", "-C", str(live), "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "HEAD"], live)
-    tag = out.strip()
-    if code == 0 and re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag):
-        return tag[1:]
-    try:
-        with open(live / "pyproject.toml", "rb") as handle:
-            return str(tomllib.load(handle)["project"]["version"])
-    except (OSError, KeyError, tomllib.TOMLDecodeError):
-        pass
-    try:
-        from importlib.metadata import version
-        return version("haivequeen")
-    except Exception:
-        return "–"
+    code, out = run(["git", "-C", str(live), "tag", "--merged", "HEAD", "--list", "v[0-9]*"], live)
+    versions = [tuple(map(int, tag[1:].split('.'))) for tag in out.splitlines()
+                if re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag)] if code == 0 else []
+    return '.'.join(map(str, max(versions))) if versions else '0.0.0'
+
+
+def validate_install_repository(version, *, offer=None, live=None, run=None):
+    """Reject an update source different from the install origin before stopping anything."""
+    from . import config, releases, selfupdate
+    machine = config.load_config()
+    configured = str((machine.get('update') or {}).get('repository') or '').strip()
+    offer = offered() if offer is None else offer
+    source = str((offer or {}).get('repository') or '') if (offer or {}).get('version') == str(version) else ''
+    expected = [value for value in (configured, source) if value]
+    if not expected:
+        return  # legacy offers use the installation origin, without an override
+    live = live or selfupdate.live_folder()
+    run = run or selfupdate.run_command
+    code, out = run(['git', '-C', str(live), 'remote', 'get-url', 'origin'], live)
+    if code:
+        raise ValueError('Cannot verify update repository: installation origin is unavailable')
+    actual = releases.repository_from_remote(out.strip())
+    if any(value.casefold() != actual.casefold() for value in expected):
+        raise ValueError('Update repository differs from installation origin; check the update repository setting and check for updates again')
 
 
 # ---- checking ----
@@ -139,17 +202,24 @@ def check(machine, now=None, manual=False, lookup=None, current=None):
     if not manual and not due(machine, state, now):
         return None
     lookup = lookup or releases.check_latest
-    state["last_check"] = now.isoformat(timespec="seconds")
+    state = {"last_check": now.isoformat(timespec="microseconds")}
     try:
-        found = lookup(repository(machine), current or installed_version())
+        source = repository(machine)
+        found = lookup(source, current or installed_version())
         state.update(available=dict(found) if found else None, error="", no_release=False)
+        if found:
+            state['available']['repository'] = source
     except Exception as exc:   # offline, rate limit, unknown repository: shown, never fatal
         if isinstance(exc, releases.NoRelease) or (isinstance(exc, HTTPError) and exc.code == 404):
             state.update(available=None, error="", no_release=True)
         else:
             state.update(available=None, error=str(exc)[:300] or exc.__class__.__name__, no_release=False)
-    save_state(state)
-    return state
+    with _state_lock():
+        latest = load_state()
+        if str(latest.get('last_check') or '') <= state['last_check']:
+            latest.update(state)
+            _write_state(latest)
+        return latest
 
 
 def offered(state=None):
@@ -175,6 +245,7 @@ def request_install(version, spawn=None) -> dict:
     found = offered()
     if not found or found["version"] != str(version):
         raise ValueError("version %s is not the offered update" % version)
+    validate_install_repository(version, offer=found)
     after = 0
     try:
         conn = db.connect(selfupdate_db_path())
@@ -187,9 +258,10 @@ def request_install(version, spawn=None) -> dict:
         pass
     spawn = spawn or (lambda v: selfupdate.spawn_worker(version=v))
     result = spawn(found["version"])
-    state = load_state()
-    state["installing"] = {"version": found["version"], "after_row": after, "since": datetime.now().isoformat(timespec="seconds")}
-    save_state(state)
+    with _state_lock():
+        state = load_state()
+        state["installing"] = {"version": found["version"], "after_row": after, "since": datetime.now().isoformat(timespec="seconds")}
+        _write_state(state)
     return result or {}
 
 
@@ -211,8 +283,29 @@ def install_finished(state, last_row):
 
 def settle_install(last_row) -> str:
     """Close a started install once its self-update row ended: 'ok' (the GUI restarts itself) or 'failed' (shown until the next check); None otherwise."""
+    with _state_lock():
+        return _settle_install(last_row)
+
+
+def _settle_install(last_row):
     state = load_state()
     done = install_finished(state, last_row)
+    started = state.get('installing')
+    if not done and started and last_row and int(last_row.get('id') or 0) > int(started.get('after_row') or 0):
+        # A started worker can die before closing its history row. Observing it
+        # must never kill a process, run rollback, or claim successful installation.
+        from . import selfupdate
+        try:
+            pid = int(selfupdate.lock_path().read_text(encoding='ascii').strip())
+        except (OSError, ValueError):
+            pid = None
+        if pid is not None and pid > 0:
+            if not osplat.process_alive(pid):
+                done = 'failed'
+            else:
+                command = osplat.process_command_line(pid)
+                if command is not None and not selfupdate.is_update_worker(command):
+                    done = 'failed'
     if done:
         started = state.pop("installing")
         if done == "failed":
@@ -222,7 +315,7 @@ def settle_install(last_row) -> str:
         else:
             state.pop("failed", None)
             state["available"] = None
-        save_state(state)
+        _write_state(state)
     return done
 
 

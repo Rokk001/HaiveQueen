@@ -1,4 +1,4 @@
-"""Release proof and fresh failure counting after an owner answer."""
+"""Release proof and compatibility with historical owner retry answers."""
 from unittest import mock
 
 from bzztest import REL, RoundCase
@@ -41,7 +41,8 @@ class ReleaseRetryTests(RoundCase):
         self.mock_agent_worktrees()
         env = self.env()
         for n in range(4):
-            bees.report_attempt(env, REL, 'P1', 'heavy', 'failed', 'old%d' % n, ['R'])
+            bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', 'old%d' % n, ['R'])
+        db.add_question(self.conn, 'testproj', REL, 'P1', bees.FAILURE_QUESTION, '')
         q = db.open_questions(self.conn, 'testproj', True)[0]
         db.answer_question(self.conn, q['id'], 'Try the corrected approach.', 'owner')
         self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 0)
@@ -50,32 +51,100 @@ class ReleaseRetryTests(RoundCase):
         self.assertEqual(result['class'], 'heavy')
         # End the embedded test Bee before recording the subsequent attempts.
         bees.close_embedded(self.conn, 'testproj', REL, 'P1')
-        bees.report_attempt(env, REL, 'P1', 'heavy', 'failed', 'new0', ['R'])
+        bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', 'new0', ['R'])
         self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 0)
         for n in range(1, 4):
-            bees.report_attempt(env, REL, 'P1', 'heavy', 'failed', 'new%d' % n, ['R'])
+            bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', 'new%d' % n, ['R'])
         self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 3)
+        db.add_question(self.conn, 'testproj', REL, 'P1', bees.FAILURE_QUESTION, '')
         self.assertEqual(len(db.open_questions(self.conn, 'testproj', True)), 1)
         self.assertFalse(bees.start_process(env, REL, 'P1', 'Bea', 'heavy', 'task', ['one'], [], []))
-        self.assertIn('no higher class', bees.LAST_REFUSAL)
+        self.assertIn('diagnosis', bees.LAST_REFUSAL)
         second = db.open_questions(self.conn, 'testproj', True)[0]
         db.answer_question(self.conn, second['id'], 'Use the owner-approved approach.', 'coordinator')
         self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 0)
         self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM bee_retry_answers').fetchone()[0], 2)
         self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM bee_attempt_reports').fetchone()[0], 8)
         # Replaying a historical report stays deduplicated across answer cycles.
-        bees.report_attempt(env, REL, 'P1', 'heavy', 'failed', 'old0', ['R'])
+        bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', 'old0', ['R'])
         self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM bee_attempt_signals').fetchone()[0], 8)
-        self.assertEqual(bees.start_process(env, REL, 'P1', 'Bea', 'heavy', 'task', ['one'], [], [])['class'], 'heavy')
+        self.assertFalse(bees.start_process(env, REL, 'P1', 'Bea', 'heavy', 'task', ['one'], [], []))
+        self.assertIn('diagnosis', bees.LAST_REFUSAL)
+
+    def test_detailed_failure_answer_preserves_history_and_retry_limit(self):
+        from haivequeen.i18n import tr
+        self.mock_agent_worktrees()
+        env = self.env()
+        for language, author in [('English', 'owner'), ('German', 'coordinator')]:
+            for n in range(4):
+                bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', language + str(n), ['R'])
+            db.add_question(self.conn, 'testproj', REL, 'P1', bees.FAILURE_QUESTION, '')
+            question = next(q for q in db.open_questions(self.conn, 'testproj', True)
+                            if q['item'] == 'P1')
+            detail = tr(bees.FAILURE_QUESTION, language=language) + '\n\nAdditional diagnostic details.'
+            self.conn.execute('UPDATE questions SET question=? WHERE id=?', (detail, question['id']))
+            before = self.conn.execute('SELECT COUNT(*) FROM bee_attempt_signals').fetchone()[0]
+            db.answer_question(self.conn, question['id'], 'Continue with the corrected approach.', author)
+            self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 0)
+            self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM bee_attempt_signals').fetchone()[0], before)
+            self.assertEqual(bees.start_process(env, REL, 'P1', 'Worker', 'medium', 'task', ['one'], [], [])['class'], 'heavy')
+            bees.close_embedded(self.conn, 'testproj', REL, 'P1')
+        for n in range(4):
+            bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', 'again' + str(n), ['R'])
+        self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 3)
+        self.assertFalse(bees.start_process(env, REL, 'P1', 'Worker', 'heavy', 'task', ['one'], [], []))
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM bee_retry_answers').fetchone()[0], 2)
+
+    def test_historical_approval_is_applied_once_without_erasing_later_failures(self):
+        for n in range(4):
+            bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', 'past%d' % n, ['R'])
+            self.agent('past%d' % n, phase='bee', package='P1', status='done', ended_at='2026-01-01T10:00:00')
+        qid = db.add_question(self.conn, 'testproj', REL, 'P1', bees.FAILURE_QUESTION + '\n\nDetails', '')
+        # Model an answer ignored by the previous release, not a fresh answer.
+        self.conn.execute("UPDATE questions SET status='answered', answered_by='owner', answered_at='2026-01-01T11:00:00', answer='Continue' WHERE id=?", (qid,))
+        bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', 'later', ['R'])
+        self.agent('later', phase='bee', package='P1', status='done', ended_at='2026-01-01T12:00:00')
+        bees.reconcile_failure_answers(self.conn, 'testproj', REL, 'P1')
+        self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 1)
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM bee_attempt_signals').fetchone()[0], 5)
+        bees.reconcile_failure_answers(self.conn, 'testproj', REL, 'P1')
+        self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 1)
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM bee_retry_answers').fetchone()[0], 1)
+
+    def test_historical_approval_with_unknown_attempt_time_stays_blocked(self):
+        for n in range(4):
+            bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', 'unknown%d' % n, ['R'])
+        qid = db.add_question(self.conn, 'testproj', REL, 'P1', bees.FAILURE_QUESTION + '\nDetails', '')
+        self.conn.execute("UPDATE questions SET status='answered', answered_by='owner', answered_at='2026-01-01T11:00:00' WHERE id=?", (qid,))
+        bees.reconcile_failure_answers(self.conn, 'testproj', REL, 'P1')
+        self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 3)
+
+    def test_historical_approval_with_invalid_time_stays_blocked(self):
+        for n in range(4):
+            name = 'invalid%d' % n
+            bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', name, ['R'])
+            self.agent(name, phase='bee', package='P1', status='done', ended_at='0000-invalid')
+        qid = db.add_question(self.conn, 'testproj', REL, 'P1', bees.FAILURE_QUESTION + '\nDetails', '')
+        self.conn.execute("UPDATE questions SET status='answered', answered_by='owner', answered_at='2026-01-01T11:00:00' WHERE id=?", (qid,))
+        bees.reconcile_failure_answers(self.conn, 'testproj', REL, 'P1')
+        self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 3)
+
+    def test_failure_heading_is_not_a_substring_match(self):
+        for text in ('Other question: ' + bees.FAILURE_QUESTION,
+                     bees.FAILURE_QUESTION + ' Not a diagnostic paragraph.', '', None):
+            self.assertFalse(bees.is_failure_question(text))
+        self.assertTrue(bees.is_failure_question(bees.FAILURE_QUESTION + '\r\nDetails'))
 
     def test_unrelated_or_automatic_answers_do_not_reset_failures(self):
         env = self.env()
         for n in range(4):
-            bees.report_attempt(env, REL, 'P1', 'heavy', 'failed', 'old%d' % n, ['R'])
+            bees.record_attempt(self.conn, 'testproj', REL, 'P1', 'heavy', 'failed', 'old%d' % n, ['R'])
         unrelated = db.add_question(self.conn, 'testproj', REL, 'P1', 'Which approach?', '')
         db.answer_question(self.conn, unrelated, 'Try again.', 'owner')
         self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 3)
+        db.add_question(self.conn, 'testproj', REL, 'P1', bees.FAILURE_QUESTION, '')
         q = db.open_questions(self.conn, 'testproj', True)[0]
+        self.conn.execute('UPDATE questions SET question=? WHERE id=?', (bees.FAILURE_QUESTION + '\n\nDetails', q['id']))
         db.answer_question(self.conn, q['id'], 'Duplicate.', 'auto')
         self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'heavy'), 3)
 

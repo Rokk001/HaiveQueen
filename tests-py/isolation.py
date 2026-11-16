@@ -14,6 +14,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Windows may expose an 8.3 TEMP alias while Git returns the long path.
+# Give every fixture a canonical root before creating temporary directories.
+tempfile.tempdir = os.path.realpath(tempfile.gettempdir())
+
 REPO = str(Path(__file__).resolve().parent.parent)
 if REPO not in sys.path:   # haivequeen of this checkout, not an installed copy, even when this module is imported first (test_00_isolation.py)
     sys.path.insert(0, REPO)
@@ -149,6 +153,7 @@ def guard_hits():
 REAL_BEFORE = snapshot_real()
 os.environ.setdefault("BZZ_NO_UPDATE_CHECK", "1")   # no automatic update check asks GitHub during the tests (test_k10_updates.py removes this)
 os.environ.setdefault("BZZ_NO_LOGIN_CHECK", "1")   # providers of the tests need no login in the profile (test_profile.py removes this)
+os.environ["BZZ_NO_DASHBOARD_QUOTA_REFRESH"] = "1"
 ROOT = Path(tempfile.mkdtemp(prefix="hq-tests-appdata-"))
 REDIRECTED = {"LOCALAPPDATA": ROOT / "local", "APPDATA": ROOT / "roaming", "XDG_DATA_HOME": ROOT / "local", "XDG_CONFIG_HOME": ROOT / "roaming"}
 ORIGINAL = {_var: os.environ.get(_var) for _var in REDIRECTED}  # real values for read-only live-loop checks

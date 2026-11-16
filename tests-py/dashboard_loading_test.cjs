@@ -1,0 +1,11 @@
+const assert=require('node:assert/strict');
+const {dashboardLoading}=require('../haivequeen/web-client.js');
+const doc={createElement:tag=>({tag,children:[],attrs:{},append(...nodes){this.children.push(...nodes)},setAttribute(k,v){this.attrs[k]=v}})};
+const root=dashboardLoading(doc,x=>x);
+const all=n=>[n,...n.children.flatMap(all)];
+assert.equal(root.attrs['aria-busy'],'true');
+assert.equal(all(root).filter(n=>n.className==='loading-metric').length,7);
+assert.equal(all(root).filter(n=>n.className==='loading-panel').length,4);
+assert(all(root).some(n=>n.attrs.role==='status'&&n.textContent.includes('Loading')));
+assert(!all(root).some(n=>n.tag==='button'),'Loading placeholders must not accept actions');
+console.log('Dashboard loading state passed');

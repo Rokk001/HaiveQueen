@@ -2,7 +2,8 @@
 slots = 2                 # agent processes shared by all projects
 hives = 2                 # maximum plans with running Queens, machine-wide
 excludedProviders = []    # provider names never used
-queenClass = "medium"     # project may override
+queenClass = "heavy"      # global coordination default
+diagnosisClass = "heavy"  # question, package and integration diagnosis
 beesPerQueen = 3          # project may override
 escalateAfter = 3         # failures per class before escalation
 readyCheckClass = "medium"   # class of the check agent of bzz ready
@@ -11,7 +12,9 @@ buildJobs = { cores = 6, parallel = 1, minFreeRamGB = 2 }   # builds: CPU cores 
 ramReserveMb = 2048       # RAM that must stay free
 agentStallSeconds = 3600  # an agent that prints nothing for this long is marked as stalled, never ended (0 = off)
 exportDir = "%LOCALAPPDATA%\\HaiveQueen\\exports"
-retention = { logsDays = 30, runsDays = 30, databaseDays = 90, inboxDays = 30 }  # expired data is removed by the loop; zero disables that category
+# logsDays also expires completed orchestrator action journals after their end time;
+# active, incomplete or unreadable journals are kept. Zero disables that category.
+retention = { logsDays = 30, runsDays = 30, databaseDays = 90, inboxDays = 30 }  # expired data is removed by the loop
 update = { checkHours = 24, repository = "" }   # hours between two update checks (0 = only Check now); repository "owner/name" (empty: the origin of the install folder)
 
 # Interrupted agent ends (laptop sleep, network or API errors, vanished process): the values below are the defaults.
@@ -32,7 +35,7 @@ beeMode = "subagent"   # how the Queen of this provider runs her agents: subagen
 [providers.classes]
 light = { model = "claude-haiku-5-5", effort = "medium" }
 medium = { model = "claude-sonnet-5-5", effort = "medium" }   # optional per model: add contextLimitTokens = 200000 inside the braces to override the global value
-heavy = { model = "claude-opus-5-5", effort = "medium" }
+heavy = { model = "claude-opus-5-5", effort = "high" }
 
 [[providers]]
 name = "codex"
@@ -47,7 +50,7 @@ capabilitiesVersion = 1
 [providers.classes]
 light = { model = "gpt-6-luna", effort = "medium" }
 medium = { model = "gpt-6.1-terra", effort = "medium" }
-heavy = { model = "gpt-6.1-sol", effort = "medium" }
+heavy = { model = "gpt-6.1-sol", effort = "high" }
 
 # A CLI HaiveQueen does not know brings its profile values itself (Claude, Codex, OpenCode and Kilo Code have them built in). It is accepted only when it
 # writes one of the output formats HaiveQueen reads: "claude", "codex" or "opencode". Example, kept as a comment:

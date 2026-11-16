@@ -7,6 +7,58 @@ from haivequeen import bees, db, dashboard_data, hives, loop, owner, runtime, st
 
 
 class WebApiTests(RoundCase):
+    def test_owner_job_history_and_individual_status_are_available(self):
+        history = [{'id': 'saved', 'running': False, 'result': {'completed': 2}}]
+        with mock.patch.object(web_jobs, 'recent', return_value=history):
+            self.assertEqual(web_api.execute(self.conn, 'jobs/status', {}), history)
+        with mock.patch.object(web_jobs, 'status', return_value=history[0]) as status:
+            self.assertEqual(web_api.execute(self.conn, 'jobs/status', {'id': 'saved'}), history[0])
+            status.assert_called_once_with('saved')
+
+    def test_workflow_saved_reloaded_and_empty_field_does_not_disable_step(self):
+        from haivequeen import projsettings
+        view = web_api.settings_view(self.conn, 'testproj')
+        data = projsettings.select_working_way(view['data'], 'git')
+        data = projsettings.select_step_mode(data, 'check', 'local')
+        data.update(checkEnabled=True, compileCheck='check')
+        web_api.settings_save(self.conn, {'project': 'testproj', 'revision': view['revision'], 'data': data})
+        loaded = web_api.settings_view(self.conn, 'testproj')
+        self.assertEqual(loaded['data']['wayOfWorking'], 'custom')
+        self.assertTrue(loaded['data']['checkEnabled'])
+        self.assertEqual(loaded['data']['checkMode'], 'local')
+        loaded['data']['compileCheck'] = ''
+        with self.assertRaisesRegex(ValueError, 'compileCheck is required'):
+            web_api.settings_save(self.conn, {'project': 'testproj', 'revision': loaded['revision'], 'data': loaded['data']})
+        self.assertTrue(web_api.settings_read(self.conn, 'testproj')['data']['checkEnabled'])
+
+    def test_project_workflow_view_migrates_legacy_and_reports_capabilities(self):
+        from haivequeen import git_provider, projsettings
+        provider = SimpleNamespace(name='example', capabilities={'release_tag', 'release_state'},
+                                   supports_step=lambda step: step != 'Build')
+        with mock.patch.object(projsettings, '_git', return_value='https://example.invalid/owner/repo'), \
+             mock.patch.object(git_provider, 'discover', return_value=(provider, [])):
+            view = web_api.settings_view(self.conn, 'testproj')
+        self.assertEqual(view['data']['wayOfWorking'], 'local')
+        self.assertNotIn('publishReleases', view['data'])
+        self.assertEqual(view['git_workflow']['provider'], 'example')
+        self.assertFalse(view['git_workflow']['supported']['build'])
+        self.assertTrue(view['git_workflow']['supported']['release'])
+        with mock.patch.object(git_provider, 'discover', return_value=(None, [])):
+            view = web_api.settings_view(self.conn, 'testproj')
+        self.assertEqual(view['git_workflow']['provider'], '')
+        self.assertFalse(any(view['git_workflow']['supported'].values()))
+
+    def test_azure_workflow_supports_tag_triggered_release(self):
+        from haivequeen import git_provider, projsettings
+        from haivequeen.git_providers import azure
+        provider = git_provider.Provider('azure', azure, ('org', 'project', 'repo'))
+        with mock.patch.object(projsettings, '_git', return_value='https://dev.azure.com/org/project/_git/repo'), \
+             mock.patch.object(git_provider, 'discover', return_value=(provider, [])):
+            supported = web_api.settings_view(self.conn, 'testproj')['git_workflow']['supported']
+        self.assertTrue(supported['merge'])
+        self.assertTrue(supported['check'])
+        self.assertTrue(supported['release'])
+
     def test_step_logs_are_isolated_by_plan_and_step(self):
         from haivequeen import orchestrator
         self.plan()
@@ -38,6 +90,7 @@ class WebApiTests(RoundCase):
         for path in ('../private.txt', str(self.base / 'private.txt'), 'missing.md'):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 web_api.execute(self.conn, 'plan/detail', {'project':'testproj','plan':path})
+
 
 
     def test_snapshot_reports_when_paused_plan_has_fully_stopped(self):
@@ -112,9 +165,11 @@ class WebApiTests(RoundCase):
             web_api.execute(self.conn, 'settings', {'project': '../private'})
 
     def test_update_and_provider_login_actions(self):
-        with mock.patch.object(updates, 'check', return_value={'available': True}) as check:
+        with mock.patch.object(updates, 'check', return_value={'available': False}) as check, \
+             mock.patch.object(updates, 'display_state', return_value={'available': True}) as display:
             self.assertTrue(web_api.execute(self.conn, 'updates/check', {})['available'])
             self.assertTrue(check.call_args.kwargs['manual'])
+            display.assert_called_once_with()
         with mock.patch.object(updates, 'request_install', return_value={'ok': True}) as install:
             with self.assertRaises(ValueError):
                 web_api.execute(self.conn, 'updates/install', {'version': 'v1'})
@@ -218,7 +273,7 @@ class WebApiTests(RoundCase):
         providers = [{'name': 'current', 'capabilities': ['Queen'], 'classes': {'medium': {'model': 'model'}}},
                      {'name': 'alternate', 'capabilities': ['Queen'], 'classes': {'medium': {'model': 'model'}}},
                      {'name': 'worker', 'capabilities': [], 'classes': {'medium': {'model': 'model'}}}]
-        env = SimpleNamespace(name='testproj', settings={}, providers=providers)
+        env = SimpleNamespace(name='testproj', settings={'queenClass': 'medium'}, providers=providers)
         with mock.patch.object(web_api.sch, 'load_projects', return_value=[env]), mock.patch.object(hives, 'get', return_value={'provider': 'current'}), mock.patch.object(hives, 'requeen') as restart:
             choices = web_api.execute(self.conn, 'plan/providers', {'project': 'testproj', 'plan': REL})
             self.assertEqual(choices, [{'name': 'current', 'current': True, 'selectable': True}, {'name': 'alternate', 'current': False, 'selectable': True}])

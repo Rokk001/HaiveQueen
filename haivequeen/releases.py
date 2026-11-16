@@ -3,6 +3,31 @@ import re
 from urllib.request import urlopen
 
 
+def prerelease_tag(tags, postfix, requested="", start=""):
+    """Choose a prerelease tag from all repository tags, without project files."""
+    if not re.fullmatch(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", postfix):
+        raise ValueError("invalid release postfix")
+    full = []
+    for tag in tags:
+        if re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag):
+            full.append(tuple(map(int, tag[1:].split("."))))
+    if full:
+        current = ".".join(map(str, max(full)))
+        try:
+            version = next_version(current, requested) if requested else next_version(current)
+        except ValueError:
+            version = next_version(current)
+    else:
+        if not start:
+            raise ValueError("start version required")
+        next_version(start)  # validate without incrementing the owner's start version
+        version = start
+    # The sequence belongs to the version, even when the configured postfix changes.
+    pattern = re.compile(r"v" + re.escape(version) + r"-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\.(\d+)$")
+    numbers = [int(match.group(1)) for tag in tags if (match := pattern.fullmatch(tag))]
+    return "v%s-%s.%d" % (version, postfix, max(numbers, default=0) + 1)
+
+
 def next_version(current: str, requested: str = "") -> str:
     """Increment the patch or accept a strictly newer three-part version."""
     def parse(value):
@@ -24,68 +49,28 @@ class NoRelease(LookupError):
     """GitHub answered HTTP 404 for the latest release: the repository has no published release yet."""
 
 
-def check_latest(repository: str, current: str):
-    """Return the latest stable GitHub release if it is newer, otherwise None; NoRelease when GitHub has no release yet (HTTP 404)."""
-    import json
-    from urllib.error import HTTPError
-    from urllib.request import Request
-
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(part in (".", "..") for part in repository.split("/")):
-        raise ValueError("repository must be an owner/name pair")
-    next_version(current)  # Validate before making a network request.
-    request = Request("https://api.github.com/repos/%s/releases/latest" % repository,
-                      headers={"Accept": "application/vnd.github+json", "User-Agent": "HaiveQueen"})
+def _github(operation, repository, *args):
+    from .git_provider import Provider, ProviderError
+    from .git_providers import github
     try:
-        with urlopen(request, timeout=15) as response:
-            release = json.load(response)
-    except HTTPError as exc:
-        if exc.code == 404:
-            raise NoRelease("no release published yet") from exc
+        return Provider("github", github, repository).call(operation, *args, _urlopen=urlopen)
+    except ProviderError as exc:
+        if exc.__cause__ is not None:
+            raise exc.__cause__
         raise
-    version = str(release.get("tag_name", "")).removeprefix("v")
-    try:
-        if not version:
-            return None
-        next_version(current, version)
-    except ValueError:
-        return None
-    return {"version": version, "url": str(release.get("html_url", ""))}
+
+
+def check_latest(repository: str, current: str):
+    return _github("check_latest", repository, current)
 
 
 def latest_version(repository: str):
-    """The version of the latest stable GitHub release of `repository`, or None when it has none (404) or its tag is no version."""
-    import json
-    from urllib.error import HTTPError
-    from urllib.request import Request
-
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(part in (".", "..") for part in repository.split("/")):
-        raise ValueError("repository must be an owner/name pair")
-    request = Request("https://api.github.com/repos/%s/releases/latest" % repository,
-                      headers={"Accept": "application/vnd.github+json", "User-Agent": "HaiveQueen"})
-    try:
-        with urlopen(request, timeout=15) as response:
-            release = json.load(response)
-    except HTTPError as exc:
-        if exc.code == 404:
-            return None
-        raise
-    version = str(release.get("tag_name", "")).removeprefix("v")
-    try:
-        next_version(version)
-    except ValueError:
-        return None
-    return version
+    return _github("latest_version", repository)
 
 
 def repository_from_remote(remote: str) -> str:
-    """Extract an owner/name pair from a GitHub HTTPS or SSH remote."""
-    match = re.fullmatch(
-        r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
-        r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?", remote, re.IGNORECASE
-    )
-    if not match or any(part in (".", "..") for part in match.groups()):
-        raise ValueError("remote must identify a GitHub repository")
-    return "/".join(match.groups())
+    from .git_providers.github import repository_from_remote as parse
+    return parse(remote)
 
 
 def release_decision(repository, version, commit):
@@ -109,71 +94,9 @@ def valid_decision(value, repository, version, commit):
 
 
 def publish_release(repository: str, version: str, commit: str, token: str, decision=None):
-    """Publish a release at an exact commit; safely retry an existing release.
-
-    An existing tag must be lightweight and point at the requested commit.
-    Network and GitHub errors propagate so callers can retry or report them.
-    """
-    import json
-    from urllib.error import HTTPError
-    from urllib.request import Request
-
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(
-        part in (".", "..") for part in repository.split("/")
-    ):
-        raise ValueError("repository must be an owner/name pair")
-    next_version(version)
-    if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
-        raise ValueError("commit must be a full Git object ID")
-    if not token or "\n" in token or "\r" in token:
-        raise ValueError("a GitHub token is required")
-    decision = decision if decision is not None else release_decision(repository, version, commit)
+    if decision is None:
+        return _github("publish_release", repository, version, commit, token)
     if not valid_decision(decision, repository, version, commit):
         raise ValueError("invalid release compatibility decision")
-    body = json.dumps(decision, sort_keys=True, separators=(",", ":"))
-    base = "https://api.github.com/repos/" + repository
-    tag = "v" + version
-    headers = {"Accept": "application/vnd.github+json", "User-Agent": "HaiveQueen",
-               "Authorization": "Bearer " + token, "X-GitHub-Api-Version": "2022-11-28"}
-
-    def request(path, data=None):
-        payload = json.dumps(data).encode("utf-8") if data is not None else None
-        req = Request(base + path, data=payload, headers=headers,
-                      method="POST" if payload is not None else "GET")
-        with urlopen(req, timeout=15) as response:
-            return json.load(response)
-
-    try:
-        ref = request("/git/ref/tags/" + tag)
-    except HTTPError as exc:
-        if exc.code != 404:
-            raise
-        ref = None
-    if ref is None:
-        try:
-            ref = request("/git/refs", {"ref": "refs/tags/" + tag, "sha": commit})
-        except HTTPError as exc:
-            if exc.code != 422:
-                raise
-            # Another publisher may have created the tag concurrently.
-            ref = request("/git/ref/tags/" + tag)
-    if ref is not None:
-        obj = ref.get("object", {})
-        if obj.get("type") != "commit" or str(obj.get("sha", "")).lower() != commit.lower():
-            raise ValueError("release tag already exists at a different or unverifiable commit")
-        try:
-            existing = request("/releases/tags/" + tag)
-            if existing.get("tag_name") != tag or existing.get("draft") or existing.get("prerelease"):
-                raise ValueError("existing release is not a published stable release")
-            try:
-                existing_decision = json.loads(existing.get("body", ""))
-            except (ValueError, TypeError):
-                raise ValueError("existing release has conflicting compatibility metadata")
-            if existing_decision != decision:
-                raise ValueError("existing release has conflicting compatibility metadata")
-            return existing
-        except HTTPError as exc:
-            if exc.code != 404:
-                raise
-    return request("/releases", {"tag_name": tag, "target_commitish": commit,
-                                  "name": tag, "draft": False, "prerelease": False, "body": body})
+    from .git_providers import github
+    return github.publish_release(repository, version, commit, token, _urlopen=urlopen, decision=decision)

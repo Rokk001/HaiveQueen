@@ -10,8 +10,8 @@ class StepLogsTests(RoundCase):
         super().setUp()
         self.plan()
 
-    def request(self, step='Build'):
-        return web_api.execute(self.conn, 'plan/step-log', {'project':'testproj','plan':REL,'step':step})
+    def request(self, step='Build', **data):
+        return web_api.execute(self.conn, 'plan/step-log', {'project':'testproj','plan':REL,'step':step, **data})
 
     def state(self, **extra):
         value = {'phase':'pipeline','step':'Build','steps':{'Build':'running'}}
@@ -35,6 +35,18 @@ class StepLogsTests(RoundCase):
         self.assertEqual(result['status'], 'red')
         self.assertEqual(result['exit_code'], 1)
         self.assertFalse(result['historical'])
+
+    def test_failed_integration_stays_red_while_journal_is_running(self):
+        path = action_logs.start('testproj', REL, 'Build')
+        action_logs.append(path, 'remaining checks still running\n')
+        self.state(phase='diagnosing', log_file=path, steps={'Build':'red'},
+                   job={'step':'Build', 'checks':{'failures':{'menu':'exit 1'}}})
+        runtime.kv_set(self.conn, 'testproj', 'hive-blocker:'+REL, 'Further checks running for diagnosis')
+        result = self.request()
+        self.assertEqual(result['status'], 'red')
+        self.assertIn('menu: exit 1', result['error'])
+        self.assertIn('Further checks', result['reason'])
+        self.assertIn('remaining checks', result['output'])
 
     def test_every_step_and_project_is_isolated(self):
         for step in orchestrator.STEPS:
@@ -102,10 +114,11 @@ class StepLogsTests(RoundCase):
         runtime.kv_set(self.conn, 'testproj', 'orch-log:'+REL+':Build',
                        json.dumps({'exit_code':1, 'output':r'checks failed (exit 1), see out\checks-old.txt'}))
         result = self.request()
-        self.assertIn('first failure', result['output'])
+        source = result['references'][0]['source']
+        self.assertIn('first failure', self.request(source=source, run=result['run'])['output'])
         self.assertEqual(result['exit_code'], 1)
         log.write_text('first failure\nsecond failure\n', encoding='utf-8')
-        self.assertIn('second failure', self.request()['output'])
+        self.assertIn('second failure', self.request(source=source, run=result['run'])['output'])
 
     def test_journal_reference_is_deduplicated_and_missing_file_explained(self):
         self.plan(branch='test', worktree=str(self.wt))
@@ -113,11 +126,15 @@ class StepLogsTests(RoundCase):
         folder.mkdir(exist_ok=True)
         (folder / 'build-old.log').write_text('compiler error\n', encoding='utf-16')
         path = action_logs.start('testproj', REL, 'Build')
+        action_logs._write(path, {'event': 'execution', 'cwd': str(self.wt)})
         action_logs.append(path, 'log out/build-old.log\nlog out/build-old.log\nsee out/missing.txt')
         action_logs.finish(path, 1)
-        output = self.request()['output']
+        result = self.request()
+        self.assertEqual(len(result['references']), 2)
+        output = self.request(source=result['references'][0]['source'], run=result['run'])['output']
         self.assertEqual(output.count('compiler error'), 1)
-        self.assertIn('Referenced log unavailable: out/missing.txt', output)
+        missing = self.request(source=result['references'][1]['source'], run=result['run'])['output']
+        self.assertIn('Referenced log unavailable: out/missing.txt', missing)
 
     def test_reference_cannot_escape_plan_worktree(self):
         self.plan(branch='test', worktree=str(self.wt))

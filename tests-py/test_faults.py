@@ -1,5 +1,7 @@
 """Own-operation faults (K7): file_fault is the only place that files them, the loop detects each fault kind, and no triage or work agent starts for them."""
 import unittest
+import json
+from types import SimpleNamespace
 from datetime import datetime
 
 from bzztest import REL, RoundCase, runtime
@@ -85,6 +87,35 @@ class FaultsTest(RoundCase):
         self.assertEqual(len(q), 1)
         self.assertIn("DUMMY-B-work", q[0]["question"])
 
+    def test_archived_missing_result_is_not_reported_again(self):
+        self.check()
+        self.agent('historical-work', status='done', started=5, ended=1, last_line='finished')
+        runtime.archive_agents(self.conn, 'testproj', match='historical-work')
+        self.check()
+        self.assertEqual(self.faults_of('agent_no_result'), [])
+        self.agent('current-work', status='failed', started=1, ended=0, last_line='exit 1')
+        self.check()
+        self.assertIn('current-work', self.faults_of('agent_no_result')[0]['question'])
+
+    def test_more_than_500_observed_runs_are_not_rediscovered(self):
+        rows = [{'name': 'worker-%04d' % i, 'started_at': '2026-01-01T00:00:00',
+                 'status': 'done', 'last_line': 'finished', 'archived': 0} for i in range(501)]
+        env = SimpleNamespace(conn=self.conn, name='testproj',
+                              agents=lambda scope: [r for r in rows if scope == 'all' or not r['archived']],
+                              run_dir=lambda name: self.repo / 'runs' / name)
+        faults._check_agents(env)  # First scan establishes the baseline.
+        faults._check_agents(env)
+        self.assertEqual(self.faults_of('agent_no_result'), [])
+        rows[0]['archived'] = 1
+        faults._check_agents(env)
+        retained = json.loads(runtime.kv_get(self.conn, 'testproj', faults.SEEN_KEY))
+        self.assertNotIn('worker-0000|2026-01-01T00:00:00', retained)
+        self.assertEqual(len(retained), 500)
+        rows.append({'name': 'new-failure', 'started_at': '2026-01-02T00:00:00',
+                     'status': 'failed', 'last_line': 'exit 1', 'archived': 0})
+        faults._check_agents(env)
+        self.assertIn('new-failure', self.faults_of('agent_no_result')[0]['question'])
+
     def test_done_agent_without_result_is_filed(self):
         """A normal done row without a result is still a fault, even near the stop marker."""
         self.check()
@@ -102,15 +133,16 @@ class FaultsTest(RoundCase):
         self.round()
         self.assertEqual(len(self.faults_of("agent_no_result")), 1)
 
-    # Verify no separate triage agent starts for any question.
-    def test_no_triage_agent_for_fault_or_normal_question(self):
-        """The Queen handles plan questions without launching triage agents."""
+    # Internal faults remain outside the plan-question diagnosis workflow.
+    def test_fault_does_not_block_normal_question_diagnosis(self):
+        """A synthetic fault path must not crash the round or suppress a real question."""
         self.plan("IN_PROGRESS", [{"id": "P1", "title": "first"}])
         db.add_question(self.conn, "testproj", faults.FAULT_PLAN, "no_start", "[no_start] x", "", status="triage")
         db.add_question(self.conn, "testproj", REL, "N1", "Which?", "A", status="triage")
         self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj", "active") if a["status"] == "running"]
-        self.assertTrue(all(a["phase"] != "triage" for a in active))
+        self.assertFalse([a for a in active if a["plan_path"] == faults.FAULT_PLAN])
+        self.assertTrue([a for a in active if a["plan_path"] == REL and a["name"].startswith("question-review-")])
 
     # Ensure an answered fault does not start a work agent.
     def test_no_work_agent_for_an_answered_fault_question(self):

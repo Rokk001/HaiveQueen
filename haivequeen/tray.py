@@ -1,7 +1,9 @@
 """Windows notification-area controls for the local service and orchestrator."""
 import os
+import hashlib
 import subprocess
 import threading
+import time
 from contextlib import closing
 from pathlib import Path
 
@@ -9,7 +11,7 @@ from . import config, db, force_stop, loop, updates, version_leases, web_service
 from . import platform as osplat
 
 
-def menu(state, web_running, work_running=False, update_waiting=False):
+def menu(state, web_running, work_running=False, stale=False, update_waiting=False):
     entries = [(1, 'Open web interface', True),
             (2, 'Start', state == 'Stopped'),
             (3, 'Stop gracefully', state == 'Running'),
@@ -19,7 +21,72 @@ def menu(state, web_running, work_running=False, update_waiting=False):
             (7, 'Restart', web_running)]
     if update_waiting:
         entries.append((8, 'Force update', True))
-    return entries
+    return [(number, label, enabled and (not stale or number == 1)) for number, label, enabled in entries]
+
+
+def read_status():
+    current = state()
+    status = web_service.control('status')
+    return {'state': current, 'web': bool(status and status.get('running')),
+            'work': current == 'Stopped' and work_running(), 'update_waiting': bool(updates.waiting_status())}
+
+
+class StatusCache:
+    """At most one I/O probe; the window thread only reads short locked snapshots."""
+    def __init__(self, probe=read_status, clock=time.monotonic):
+        self.probe, self.clock = probe, clock
+        self.lock = threading.Lock()
+        self.value = {'state': 'Unknown', 'web': False, 'work': False}
+        self.updated = None
+        self.failed = False
+        self.refreshing = False
+        self.closed = False
+
+    def snapshot(self):
+        with self.lock:
+            return {**self.value, 'refreshing': self.refreshing,
+                    'stale': self.failed or self.updated is None or self.clock() - self.updated > 6}
+
+    def request(self):
+        with self.lock:
+            if self.closed or self.refreshing:
+                return
+            self.refreshing = True
+
+        def run():
+            try:
+                value = self.probe()
+                with self.lock:
+                    if not self.closed:
+                        self.value = value
+                        self.updated = self.clock()
+                        self.failed = False
+            except Exception:
+                with self.lock:
+                    self.failed = True
+            finally:
+                with self.lock:
+                    self.refreshing = False
+
+        try:
+            threading.Thread(target=run, daemon=True).start()
+        except RuntimeError:
+            with self.lock:
+                self.refreshing = False
+                self.failed = True
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+
+
+def display_name():
+    """Allow isolated runtimes to identify their native controls explicitly."""
+    return os.environ.get('BZZ_TRAY_LABEL', '').strip()[:64] or 'HaiveQueen'
+
+
+def status_tip(current):
+    return display_name() + ' - ' + current['state'] + (' (status outdated)' if current['stale'] else '')
 
 
 def work_running():
@@ -42,7 +109,7 @@ def run_command(args):
 
 def confirm():
     import ctypes
-    return ctypes.windll.user32.MessageBoxW(None, force_stop.WARNING, 'HaiveQueen', 0x24 | 0x10000) == 6
+    return ctypes.windll.user32.MessageBoxW(None, force_stop.WARNING, display_name(), 0x24 | 0x10000) == 6
 
 
 def invoke(number):
@@ -71,14 +138,29 @@ def ensure_started():
     threading.Thread(target=process.wait, daemon=True).start()
 
 
+def icon_path():
+    return Path(__file__).with_name('app-test.ico' if display_name() != 'HaiveQueen' else 'app.ico')
+
+
 def load_icon(user):
     """Load our packaged ICO at the Windows notification-area icon size."""
     import ctypes
     from ctypes import wintypes as w
     user.LoadImageW.argtypes = [w.HINSTANCE, w.LPCWSTR, w.UINT, ctypes.c_int, ctypes.c_int, w.UINT]
     user.LoadImageW.restype = w.HANDLE
-    return user.LoadImageW(None, str(Path(__file__).with_name('app.ico')), 1,
+    return user.LoadImageW(None, str(icon_path()), 1,
                            user.GetSystemMetrics(49), user.GetSystemMetrics(50), 0x10)
+
+
+def mutex_name():
+    """One tray per runtime, shared across code versions using the same data."""
+    directory = os.path.normcase(str(config.data_dir().resolve()))
+    defaults = {key: value for key, value in os.environ.items() if key != 'BZZ_DATA_DIR'}
+    default_directory = os.path.normcase(str(osplat.data_dir(env=defaults).resolve()))
+    # Keep the legacy production name while an older tray may still be running.
+    if directory == default_directory:
+        return 'Local\\HaiveQueenTray'
+    return 'Local\\HaiveQueenTray-' + hashlib.sha256(directory.encode('utf-8')).hexdigest()
 
 
 def main():
@@ -90,7 +172,7 @@ def main():
     kernel.CreateMutexW.argtypes = [ctypes.c_void_p, w.BOOL, w.LPCWSTR]
     kernel.CreateMutexW.restype = w.HANDLE
     kernel.CloseHandle.argtypes = [w.HANDLE]
-    mutex = kernel.CreateMutexW(None, False, 'Local\\HaiveQueenTray')
+    mutex = kernel.CreateMutexW(None, False, mutex_name())
     if kernel.GetLastError() == 183:
         kernel.CloseHandle(mutex)
         return
@@ -123,7 +205,9 @@ def main():
     user.DispatchMessageW.argtypes = [ctypes.POINTER(w.MSG)]
     user.DefWindowProcW.restype = LRESULT
     user.TrackPopupMenu.restype = w.UINT
-    current = {'state': '', 'web': False, 'work': False, 'handover': False}
+    cache = StatusCache()
+    current = cache.snapshot()
+    current['handover'] = False
     icon = NID()
     icon.size = ctypes.sizeof(NID)
     icon.id = 1
@@ -137,16 +221,11 @@ def main():
             current['handover'] = True
             user.PostMessageW(hwnd, 0x10, 0, 0)
             return
-        try:
-            current['state'] = state()
-            status = web_service.control('status')
-            current['web'] = bool(status and status.get('running'))
-            current['work'] = current['state'] == 'Stopped' and work_running()
-        except (OSError, ValueError, KeyError):
-            return
-        icon.tip = 'HaiveQueen - ' + current['state']
+        current.update(cache.snapshot())
+        cache.request()
+        icon.tip = status_tip(current)
         shell.Shell_NotifyIconW(1, ctypes.byref(icon))
-        if current['state'] == 'Stopped' and not current['web']:
+        if not current['stale'] and current['state'] == 'Stopped' and not current['web']:
             user.PostMessageW(hwnd, 0x10, 0, 0)
 
     @WNDPROC
@@ -156,7 +235,10 @@ def main():
             return 0
         if msg == 0x8001 and lp in (0x205, 0x202):
             popup = user.CreatePopupMenu()
-            entries = menu(current['state'], current['web'], current['work'], bool(updates.waiting_status()))
+            user.AppendMenuW(popup, 0x1, 0, display_name())
+            user.AppendMenuW(popup, 0x800, 0, None)
+            current.update(cache.snapshot())
+            entries = menu(current['state'], current['web'], current['work'], current['stale'], current.get('update_waiting', False))
             for index, (number, label, enabled) in enumerate(entries):
                 if index in (1, 4):
                     user.AppendMenuW(popup, 0x800, 0, None)
@@ -174,6 +256,7 @@ def main():
             user.DestroyWindow(hwnd)
             return 0
         if msg == 0x2:
+            cache.close()
             shell.Shell_NotifyIconW(2, ctypes.byref(icon))
             user.PostQuitMessage(0)
             return 0
@@ -182,10 +265,10 @@ def main():
     instance = kernel.GetModuleHandleW(None)
     cls = WNDCLASS(0, window, 0, 0, instance, None, None, None, None, 'HaiveQueenTrayWindow')
     user.RegisterClassW(ctypes.byref(cls))
-    hwnd = user.CreateWindowExW(0, cls.name, 'HaiveQueen', 0, 0, 0, 0, 0, None, None, instance, None)
+    hwnd = user.CreateWindowExW(0, cls.name, display_name(), 0, 0, 0, 0, 0, None, None, instance, None)
     if hwnd:
         icon.window = hwnd
-        icon.tip = 'HaiveQueen - ' + state()
+        icon.tip = display_name() + ' - Checking status'
         shell.Shell_NotifyIconW(0, ctypes.byref(icon))
         refresh(hwnd)
         user.SetTimer(hwnd, 1, 2000, None)
@@ -193,6 +276,7 @@ def main():
         while user.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
             user.TranslateMessage(ctypes.byref(message))
             user.DispatchMessageW(ctypes.byref(message))
+    cache.close()
     if icon.icon:
         user.DestroyIcon(icon.icon)
     kernel.CloseHandle(mutex)

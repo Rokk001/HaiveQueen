@@ -118,7 +118,7 @@ class CleanupTests(unittest.TestCase):
         (self.linked / 'new').unlink()
         (self.linked / 'ignored').mkdir()
         (self.linked / 'ignored' / 'data').write_text('data', encoding='utf-8')
-        self.assertIn(str(self.linked), worktrees.prune(self.env, dry=True)['removed'])   # a file the .gitignore leaves out is build output
+        self.assertNotIn(str(self.linked), worktrees.prune(self.env, dry=True)['removed'])
 
     # Locks and configured protected paths prevent removal.
     def test_locked_and_protected_worktrees_are_kept(self):
@@ -202,6 +202,8 @@ class CleanupTests(unittest.TestCase):
         except OSError as exc:
             self.skipTest('Creating symlinks is unavailable: %s' % exc)
         self.env.settings['ignoredBuildOutput'] = ['ignored/']
+        # Git's directory-only pattern does not ignore a POSIX symlink.
+        (self.repo / '.git' / 'info' / 'exclude').write_text('ignored\n', encoding='utf-8')
         self.assertIn(str(self.linked), worktrees.prune(self.env)['removed'])
         self.assertEqual(data.read_text(encoding='utf-8'), 'keep')
 
@@ -536,12 +538,12 @@ class CleanupTests(unittest.TestCase):
         self.assertIn(str(self.linked), result['removed'])
 
     # Files the repository's .gitignore leaves out are build output and never keep a worktree.
-    def test_verified_ignored_data_is_build_output(self):
-        """Files the repository's .gitignore leaves out are build output; an untracked file that is not ignored still keeps the worktree."""
+    def test_verified_ignored_data_is_preserved(self):
+        """Ignored user data is protected unless explicitly classified as build output."""
         (self.linked / 'ignored').mkdir()
         (self.linked / 'ignored' / 'data').write_text('output', encoding='utf-8')
         result = worktrees._prune_with_checker(self.env, lambda path: False, True)
-        self.assertIn(str(self.linked), result['removed'])
+        self.assertNotIn(str(self.linked), result['removed'])
 
     # Tracked changes and Git locks independently prevent cleanup.
     def test_verified_dirty_and_locked_candidates_are_kept(self):
@@ -629,6 +631,14 @@ class CleanupTests(unittest.TestCase):
 # Check automatic cleanup at the round boundary.
 class CleanupSchedulingTests(unittest.TestCase):
     """Check automatic cleanup at the round boundary."""
+
+    def setUp(self):
+        # Scheduling now keeps an OS guard file; isolate it with the other fixtures.
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        data = mock.patch('haivequeen.platform.data_dir', return_value=Path(folder.name))
+        data.start()
+        self.addCleanup(data.stop)
 
     # A normal round checks old worktrees for every project.
     def test_round_calls_cleanup_for_each_project(self):

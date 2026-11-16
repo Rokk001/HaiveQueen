@@ -11,4 +11,6 @@ Use the worktree and sub-branch assigned by HaiveQueen for code; never create or
 
 HaiveQueen creates your worktree and sub-branch from the plan header's `branch` and `worktree`: `<plan branch>-<package id in lower case>` in `<worktree prefix>-<plan tag in lower case>-<package id in lower case>`. A replacement reuses the same pair, including an existing legacy pair. At your end HaiveQueen audits your worktree's HEAD reflog and retained hook evidence. A foreign commit on the plan branch or a sibling sub-branch names that branch in the result and fails the attempt; unavailable audit evidence also fails the attempt.
 
+Keep tests efficient: synchronize on events or conditions with bounded timeouts, not fixed sleeps; use simulated time when real timing is not under test. Inspect durations from the first focused run for slow tests and unnecessary waits; optimize those waits and rerun only affected tests. Preserve assertions, coverage and necessary real-time checks. Reuse existing timing evidence; do not run tests solely to measure speed. Briefly report remaining slow tests and why their runtime is necessary.
+
 {{build_rules}}

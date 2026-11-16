@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import queue
 import time
 import types
 import unittest
@@ -58,7 +59,7 @@ class FakeGit:
             return self.fail.get("pip", 0), "pip out"
         self.calls.append(("start", str(cwd)))
         self.start_argv = list(argv)
-        self.started = True
+        self.started = not bool(self.fail.get("start"))
         if self.fail.get("start"):
             return self.fail["start"], "start failed"
         if self.conn is not None:   # the new loop runs and ends its first round
@@ -103,6 +104,89 @@ class SelfUpdateBase(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         return calls
+
+
+class RollbackQuiescenceTest(SelfUpdateBase):
+    def test_timeout_drains_loop_agents_and_pending_start_before_reset(self):
+        self.stub_faults()
+        git = FakeGit(self.conn, changed="pyproject.toml")
+        state = {"loop": 0, "agents": [], "sleeps": 0}
+
+        def timeout(*args):
+            state["loop"] = 4242
+            state["agents"] = ["worker"]
+            loop.start_pending_file().write_text("pending")
+            return False
+
+        def drain(seconds):
+            self.assertNotIn("reset --keep", git.words())
+            self.assertEqual(git.words().count("pip"), 1)
+            self.assertIn("self-update rollback", loop.stop_flag().read_text())
+            self.assertFalse(selfupdate.round_path().exists())
+            state["sleeps"] += 1
+            if state["sleeps"] == 1:
+                state["loop"] = 0
+            elif state["sleeps"] == 2:
+                state["agents"] = []
+            else:
+                loop.start_pending_file().unlink()
+
+        with mock.patch.object(selfupdate, "wait_first_round", side_effect=timeout), mock.patch.object(
+                selfupdate, "busy_agents", side_effect=lambda *a: state["agents"]):
+            result = self.update(git, loop_pid=lambda: state["loop"], sleep=drain)
+        self.assertEqual(state["sleeps"], 3)
+        self.assertEqual(result["result"], "rollback")
+        self.assertEqual(git.words().count("start"), 2)
+
+    def test_owner_stop_during_drain_keeps_installation_and_does_not_restart(self):
+        git = FakeGit(self.conn)
+        state = {"loop": 0}
+
+        def timeout(*args):
+            state["loop"] = 4242
+            return False
+
+        def owner_stop(seconds):
+            loop.stop_flag().write_text("stop requested by owner")
+            state["loop"] = 0
+
+        with mock.patch.object(selfupdate, "wait_first_round", side_effect=timeout):
+            result = self.update(git, loop_pid=lambda: state["loop"], sleep=owner_stop)
+        self.assertEqual(result["result"], "failed")
+        self.assertIn("stopped by the owner", result["note"])
+        self.assertNotIn("reset --keep", git.words())
+        self.assertEqual(git.words().count("start"), 1)
+        self.assertEqual(git.head, NEW)
+
+    def test_owner_stop_at_timeout_is_not_overwritten(self):
+        git = FakeGit(self.conn)
+
+        def timeout(*args):
+            loop.stop_flag().write_text("stop requested by owner")
+            return False
+
+        with mock.patch.object(selfupdate, "wait_first_round", side_effect=timeout):
+            result = self.update(git)
+        self.assertEqual(result["result"], "failed")
+        self.assertEqual(loop.stop_flag().read_text(), "stop requested by owner")
+        self.assertNotIn("reset --keep", git.words())
+        self.assertEqual(git.words().count("start"), 1)
+
+    def test_owner_stop_during_reset_prevents_restart(self):
+        git = FakeGit(self.conn, fail={"push": 1})
+
+        def run(argv, cwd):
+            result = git(argv, cwd)
+            if "reset" in argv:
+                loop.stop_flag().write_text("stop requested by owner")
+            return result
+
+        run.inner = git
+        result = self.update(run)
+        self.assertEqual(result["result"], "failed")
+        self.assertEqual(git.head, OLD)
+        self.assertNotIn("start", git.words())
+        self.assertIn("not restarted", result["note"])
 
 
 class TableTest(SelfUpdateBase):
@@ -188,7 +272,8 @@ class SpawnTest(SelfUpdateBase):
     def test_command_returns_at_once(self):
         """`self-update` without --worker spawns and prints; it never runs the update itself."""
         with mock.patch.object(selfupdate, "spawn_worker", return_value={"how": "detached"}) as spawn, \
-                mock.patch.object(selfupdate, "run_update") as upd, mock.patch("builtins.print") as pr:
+                mock.patch.object(selfupdate, "run_update") as upd, mock.patch("builtins.print") as pr, \
+                mock.patch.object(selfupdate, "live_folder", return_value=self.live):
             code = cli.main(["self-update"])
         self.assertEqual(code, 0)
         spawn.assert_called_once_with()
@@ -232,6 +317,18 @@ class WaitTest(SelfUpdateBase):
         self.agent("HaiveQueen", "Hq", 22)
         living = {21, 22}
         git = FakeGit()
+        waits = queue.Queue()
+        def observe_wait(_seconds):
+            waits.put(frozenset(living))
+            threading.Event().wait(.005)
+        def reached_wait(expected):
+            deadline = time.monotonic() + 5
+            while True:
+                snapshot = waits.get(timeout=max(.001, deadline - time.monotonic()))
+                if snapshot == frozenset(expected):
+                    return
+                if time.monotonic() >= deadline:
+                    self.fail('update did not reach the expected resource wait')
         out = {}
 
         def work():
@@ -239,22 +336,19 @@ class WaitTest(SelfUpdateBase):
             conn = db.connect(Path(self.tmp.name) / "haivequeen.db")
             git.conn = conn
             try:
-                out["res"] = selfupdate.run_update(conn, live=self.live, run=git, sleep=lambda s: time.sleep(0.005), poll=0.01, round_timeout=5.0,
+                out["res"] = selfupdate.run_update(conn, live=self.live, run=git, sleep=observe_wait, poll=0.01, round_timeout=5.0,
                                                    alive=lambda pid: pid in living, loop_pid=lambda: 4242 if git.started else 0)
             finally:
                 conn.close()
 
         t = threading.Thread(target=work)
         t.start()
-        deadline = time.time() + 5
-        while not loop.stop_flag().exists() and time.time() < deadline:
-            time.sleep(0.01)
+        reached_wait({21, 22})
         self.assertTrue(loop.stop_flag().exists())
-        time.sleep(0.2)
         self.assertEqual(git.words(), ["rev-parse"])
         self.assertTrue(selfupdate.lock_path().exists())
         living.discard(21)   # the ODP agent ends by itself; the other still runs
-        time.sleep(0.2)
+        reached_wait({22})
         self.assertEqual(git.words(), ["rev-parse"])
         self.assertIsNone(self.row()["result"])
         living.discard(22)
@@ -269,6 +363,18 @@ class WaitTest(SelfUpdateBase):
         integ = self.agent("HaiveQueen", "Integ", 32, phase="integrate")
         living = {31, 32}
         git = FakeGit()
+        waits = queue.Queue()
+        def observe_wait(_seconds):
+            waits.put(frozenset(living))
+            threading.Event().wait(.005)
+        def reached_wait(expected):
+            deadline = time.monotonic() + 5
+            while True:
+                snapshot = waits.get(timeout=max(.001, deadline - time.monotonic()))
+                if snapshot == frozenset(expected):
+                    return
+                if time.monotonic() >= deadline:
+                    self.fail('update did not reach the expected resource wait')
         threads = []
 
         def fake_spawn(live=None):
@@ -278,7 +384,7 @@ class WaitTest(SelfUpdateBase):
                 conn = db.connect(Path(self.tmp.name) / "haivequeen.db")
                 git.conn = conn
                 try:
-                    selfupdate.run_update(conn, live=self.live, run=git, sleep=lambda s: time.sleep(0.005), poll=0.01, round_timeout=5.0,
+                    selfupdate.run_update(conn, live=self.live, run=git, sleep=observe_wait, poll=0.01, round_timeout=5.0,
                                           alive=lambda pid: pid in living, loop_pid=lambda: 4242 if git.started else 0)
                 finally:
                     conn.close()
@@ -287,14 +393,15 @@ class WaitTest(SelfUpdateBase):
             t.start()
             return {"how": "detached"}
 
-        with mock.patch.object(selfupdate, "spawn_worker", fake_spawn), mock.patch("builtins.print"):
+        with mock.patch.object(selfupdate, "spawn_worker", fake_spawn), mock.patch("builtins.print"), \
+                mock.patch.object(selfupdate, "live_folder", return_value=self.live):
             caller = threading.Thread(target=lambda: selfupdate.cmd_self_update(argparse.Namespace(worker=False), self.conn))
             caller.start()
             caller.join(5)
             self.assertFalse(caller.is_alive(), "the command must return at once")
         db.finish_agent(self.conn, integ, "Integrated.\nDone.")   # the integrator reports and ends
         living.discard(32)
-        time.sleep(0.3)
+        reached_wait({31})
         self.assertEqual(self.conn.execute("SELECT status FROM agents WHERE id=?", (integ,)).fetchone()[0], "done")
         self.assertEqual(git.words(), ["rev-parse"])   # the update still waits for the ODP agent
         self.assertIsNone(self.row()["result"])
@@ -519,7 +626,10 @@ class UpdateTest(SelfUpdateBase):
         """A loop that never finishes its first round within the time limit is rolled back."""
         self.stub_faults()
         inner = FakeGit(None)   # the scripted start writes no loop state
-        res = self.update(inner, round_timeout=0.1)
+        def drain(seconds):
+            if loop.stop_flag().exists() and "self-update rollback" in loop.stop_flag().read_text():
+                inner.started = False
+        res = self.update(inner, round_timeout=0.1, sleep=drain)
         self.assertEqual(res["result"], "rollback")
         self.assertIn("first round", self.row()["note"])
 

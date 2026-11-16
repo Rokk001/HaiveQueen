@@ -94,6 +94,19 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual([(b["name"], b["hive"], b["model"], b["task"]) for b in waiting], [("–", "AI-LEVELS", "–", "P4")])   # no name and no stored provider before the Bee starts
 
     # A plan whose status is PAUSED shows as paused in its Hive row, without a Queen and with one.
+    def test_provider_wait_uses_current_scheduler_gate(self):
+        self.conn.execute("UPDATE agents SET status='done'")
+        self.conn.execute("UPDATE hives SET state='codex_wait'")
+        with mock.patch('haivequeen.loop.loop_running', return_value=None), mock.patch('haivequeen.loop.stop_flag') as stop:
+            stop.return_value.exists.return_value = False
+            snap = dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+        self.assertEqual(snap['hives'][0]['status'], 'Orchestrator stopped')
+        self.assertEqual(hives.get(self.conn, 'ODP', 'docs/plans/AI-LEVELS-PLAN.md')['state'], 'codex_wait')
+        with mock.patch('haivequeen.loop.loop_running', return_value=123), mock.patch('haivequeen.loop.stop_flag') as stop:
+            stop.return_value.exists.return_value = False
+            snap = dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
+        self.assertEqual(snap['hives'][0]['status'], 'Waiting for scheduler reassessment')
+
     def test_paused_plan_shows_in_the_hive_row(self):
         """The Plan row of a PAUSED plan is flagged and says so; a plan that is not paused keeps its normal status."""
         self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP','docs/plans/AI-LEVELS-PLAN.md','AI','PAUSED','2026-11-01T12:00:00')")
@@ -110,14 +123,21 @@ class SnapshotTest(unittest.TestCase):
 
     # Active Hives show running and waiting Hives only.
     def test_rejected_and_done_hives_are_not_active(self):
-        """A Plan of a REJECTED or DONE plan, also one set in the plan file and synced, is absent from the active list; a done Plan state too."""
+        """Finished plans disappear only after their remaining agents have ended."""
         plan = "docs/plans/AI-LEVELS-PLAN.md"
         def active():
             snap = dashboard_data.snapshot(self.conn, now=NOW, cfg=CFG, sysinfo=SYS)
             return snap["hives"], snap["tiles"]["hives"]
         self.assertEqual(len(active()[0]), 1)
         for status in ("CANCELLED", "DONE"):
+            self.conn.execute("UPDATE agents SET status='running' WHERE phase='queen'")
             self.conn.execute("INSERT OR REPLACE INTO plans (project, path, title, status, updated_at) VALUES ('ODP',?,'AI',?,'2026-11-01T12:00:00')", (plan, status))
+            self.conn.commit()
+            visible, count = active()
+            self.assertEqual(len(visible), 1, status)
+            self.assertEqual(count, 0, status)
+            self.assertEqual(self.conn.execute('SELECT status FROM plans WHERE path=?', (plan,)).fetchone()[0], status)
+            self.conn.execute("UPDATE agents SET status='done'")
             self.conn.commit()
             self.assertEqual(active(), ([], 0), status)
         self.conn.execute("UPDATE plans SET status='QUEUED'")
@@ -200,9 +220,9 @@ class SnapshotTest(unittest.TestCase):
 
     # The queue panel counts questions and queued rows.
     def test_queue(self):
-        """One queued row labelled ODP#1 and no open question."""
-        self.assertEqual((self.snap["queue"]["open"], self.snap["queue"]["queued"]), (0, 1))
-        self.assertEqual(self.snap["queue"]["labels"], ["ODP#1"])
+        """Integration queue records are not pending dashboard plans."""
+        self.assertEqual((self.snap["queue"]["open"], self.snap["queue"]["queued"]), (0, 0))
+        self.assertEqual(self.snap["queue"]["labels"], [])
 
     # The window shows what the overview data holds.
 

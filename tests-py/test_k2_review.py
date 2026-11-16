@@ -21,7 +21,7 @@ class CoreAccountingTests(DetachedCompileCase):
         for kind in ('agent', 'integration', 'orchestrator'):
             with self.subTest(kind=kind):
                 settings = {'buildCommand': 'build', 'buildJobs': {'cores': 1}}
-                env = SimpleNamespace(name='project', conn=self.conn, settings=settings)
+                env = SimpleNamespace(name='project', conn=self.conn, workspace=self.base, settings=settings)
                 calculated, attempting, granted = (threading.Event() for _ in range(3))
                 slots, errors = [], []
                 original = buildjobs.plan_build
@@ -158,7 +158,7 @@ class CoreAccountingTests(DetachedCompileCase):
         self.assertEqual(buildjobs.running_builds(self.conn), [])
 
     def test_orchestrator_publishes_allocation_before_starting_worker(self):
-        env = SimpleNamespace(name='project', conn=self.conn, settings={
+        env = SimpleNamespace(name='project', conn=self.conn, workspace=self.base, settings={
             'buildCommand': 'build', 'buildJobs': {'cores': 8, 'parallel': 3}})
         state = {'steps': {}}
         planned = {'Jobs': 2, 'Parallel': 3, 'Environment': {}}

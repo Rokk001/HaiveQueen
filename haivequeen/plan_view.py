@@ -1,7 +1,7 @@
 """Plan listing and actions shared by browser clients."""
 import os
 
-from . import config, db, dashboard_data, hives, loop, runtime
+from . import config, db, dashboard_data, hives, loop, runtime, filetxn
 from . import plans as plan_mod
 from .i18n import N_, tr
 
@@ -17,10 +17,11 @@ def plan_rows(conn) -> list:
     """One row per plan file of every registered Project (and per plan the table knows): project, plan_path, name, status, has_hive, stopped, error, waiting_for.
 
     The status comes from the plans table when the plan is in it, else from the plan file. `error` names a broken plan header, an unknown status or class
-    (the plan is then not silently a DRAFT or medium); `waiting_for` says what a WAITING plan waits for."""
+    (the plan is then not silently a DRAFT or medium); `waiting_for` says what a WAITING plan waits for.
+    `title` is the discovered Markdown heading when present; name/path remain the filename identity."""
     known = {(r["project"], r["path"]): r["status"] for r in db.rows(conn, "SELECT project, path, status FROM plans")}
     hive_keys = {(r["project"], r["plan_path"]) for r in db.rows(conn, "SELECT project, plan_path FROM hives")}
-    found, errors = {}, {}
+    found, errors, titles = {}, {}, {}
     for project in db.rows(conn, "SELECT name, workspace FROM projects ORDER BY name"):
         ws = project["workspace"]
         if not ws or not os.path.isdir(ws):
@@ -30,6 +31,8 @@ def plan_rows(conn) -> list:
             for plan in plan_mod.discover_plans(str(ws), pcfg["planGlobs"], pcfg["planExclude"]):
                 key = (project["name"], os.path.relpath(plan.path, ws).replace("\\", "/"))
                 found[key] = plan.status
+                if plan.title:
+                    titles[key] = plan.title
                 if plan.errors:
                     errors[key] = "; ".join(plan.errors)
         except Exception:   # an unreadable Apiary must not hide the others
@@ -38,8 +41,12 @@ def plan_rows(conn) -> list:
     for key in sorted(set(found) | set(known)):
         status = known.get(key) or found.get(key) or "DRAFT"
         stopped = status == "PAUSED" and key in known and hives.is_stopped(conn, *key)
+        recovery = filetxn.recovery_block_reason(conn, key[0])
         rows.append({"apiary": key[0], "plan_path": key[1], "name": dashboard_data.hive_name(key[1]), "status": status,
-                     "has_hive": key in hive_keys, "stopped": stopped, "error": errors.get(key, ""),
+                     **({"title": titles[key]} if key in titles else {}),
+                     "missing": runtime.plan_missing(conn, *key),
+                     "has_hive": key in hive_keys, "stopped": stopped,
+                     "error": recovery or errors.get(key, ""), "recovery_error": recovery,
                      "waiting_for": hives.waiting_for(conn, *key) if status == "WAITING" else ""})
     return rows
 
@@ -47,6 +54,8 @@ def plan_rows(conn) -> list:
 # The text of the status column.
 def status_text(row) -> str:
     """The status in lower case; a header error is shown instead of a silent status, a WAITING plan says what it waits for."""
+    if row.get('missing'):
+        return tr('Plan file missing')
     if row.get("error"):
         return tr("error: %s", row["error"])
     if row.get("waiting_for"):
@@ -59,6 +68,8 @@ def actions(row) -> list:
     """(label, action) for a row: start for a draft, a paused or a cancelled plan; pause for a sent, prepared or running plan;
     cancel for a draft or a stopped Plan; back to draft for a stopped or cancelled plan; nothing for DONE."""
     status, stopped = row["status"], row.get("stopped")
+    if row.get('missing') or row.get('recovery_error'):
+        return []
     names = []
     if status in ("DRAFT", "PAUSED", "CANCELLED"):
         names.append("start")

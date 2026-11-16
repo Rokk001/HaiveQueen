@@ -1,3 +1,5 @@
+> Archive: WEB-PARITY-AUDIT. Current user guidance: [documentation map](DOCUMENTATION-MAP.md).
+
 # Browser parity audit
 
 Compared the removed desktop sources at `bdc99da^` with the browser sources at `2ffcfea`. The dashboard's tiles, active plans and agents, activity, system, queue, limits, status, log filters, live output and update controls are represented in `web-client.js`; data continues through `dashboard_data` and overlays. Plan and question views use `plan_view` and `question_service`. General, Providers and Projects use the shared settings labels, help and defaults. The desktop local-folder and terminal buttons were intentionally removed under W-5. W-15 replaces the former pause and plan controls.

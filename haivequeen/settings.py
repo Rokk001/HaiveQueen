@@ -12,13 +12,13 @@ import tomlkit
 from .i18n import N_, tr
 
 ALLOWED_FLAG = "--allowedTools"   # the Claude Code argument whose value is the comma separated list of allowed tools
-CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "queenClass": ("light", "medium", "heavy"), "use": ("preferred", "fallback"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
+CHOICES = {"protocol": ("claude", "codex", "opencode", "kilo"), "outputFormat": ("claude", "codex", "opencode"), "queenClass": ("light", "medium", "heavy"), "diagnosisClass": ("light", "medium", "heavy"), "use": ("preferred", "fallback"), "beeMode": ("subagent", "process")}   # fields that offer a fixed choice
 CAPABILITIES = ("Coding", "Queen", "Build", "Deploy", "Image generation", "3D modelling", "Audio generation", "Video generation", "Vision", "Browser automation", "Web research", "GPU workloads", "Confidential data")
 CLASSES = ("light", "medium", "heavy")
 # The block "Build" of the General page: exactly these three fields, each with one sentence of explanation (key in the buildJobs table, label, explanation).
 BUILD_TEXT_WIDTH = 470   # pixels of an explanation in the block "Build": what stays free beside the field in the window size below, in every language
 BUILD_FIELDS = (
-    ("cores", N_("CPU cores per build"), N_("How many of your processor cores builds may use in total; a build uses fewer when the free RAM is short.")),
+    ("cores", N_("Total CPU budget for builds and checks"), N_("How many of your processor cores builds may use in total; a build uses fewer when the free RAM is short.")),
     ("parallel", N_("Parallel builds"), N_("How many targets the build command builds at the same time (the number after --parallel); each target gets the cores divided by this number.")),
     ("minFreeRamGB", N_("Minimum free RAM before a build"), N_("A build only starts while at least this many GB of RAM are free, otherwise it waits.")),
 )
@@ -44,7 +44,7 @@ SETTING_LABELS = {
     "deployCommand": N_("Deploy command (empty: no deploy)"), "claudeTools": N_("Tools available to Claude agents"), "protectedWorktrees": N_("Protected worktrees (one per line)"),
     "onEvent": N_("Command after each event"), "onEvent.command": N_("Command"), "onEvent.workDir": N_("Working folder"), "onEvent.timeoutSeconds": N_("Time limit (seconds)"),
     "views": N_("Generated overviews"), "views.queue": N_("Queue overview file"), "views.questions": N_("Open questions file"), "views.decisions": N_("Decisions file"),
-    "prompts": N_("Own prompt texts"), "prompts.integrator": N_("Instructions of the integrating Queen"),
+    "prompts": N_("Own prompt texts"), "prompts.integrator": N_("Legacy integration prompt"),
 }
 # One line of explanation per field of the Apiary page (owner decision 741 (3)).
 SETTING_HELP = {
@@ -70,13 +70,14 @@ SETTING_HELP = {
     "onEvent.timeoutSeconds": N_("The command is stopped after this many seconds."),
     "upstreamRules": N_("Reads AGENTS.md and CLAUDE.md of the Git remote named upstream (last fetch) or of the upstream folder."), "views.queue": N_("A Markdown file that shows the queue."),
     "views.questions": N_("A Markdown file that shows the open questions."), "views.decisions": N_("A Markdown file that shows the decisions."),
-    "prompts.integrator": N_("Replaces the built-in instructions of the Queen that integrates a plan."),
+    "prompts.integrator": N_("Legacy field; integration is controlled by the Orchestrator, not a Queen."),
 }
-GENERAL_LABELS = {"language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Failed attempts before a stronger model"),
-                  "owner": N_("Owner name"), "queenClass": N_("Queen class"), "beesPerQueen": N_("Agents per Queen"),
+GENERAL_LABELS = {"slowTestSeconds": N_("Slow test threshold (seconds)"), "language": N_("Interface language"), "slots": N_("Agent slots"), "roundMinutes": N_("Round length (minutes)"), "escalateAfter": N_("Failed attempts before a stronger model"),
+                  "owner": N_("Owner name"), "queenClass": N_("Queen class"), "diagnosisClass": N_("Question / diagnosis agent class"), "beesPerQueen": N_("Agents per Queen"),
                   "maxConcurrentCompileChecks": N_("Max concurrent compile checks")}
-GENERAL_HELP = {"language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("After this many failed attempts of an Agent, HaiveQueen uses the next stronger model class."),
-                "owner": N_("How the Queens and Agents call you in their texts."), "queenClass": N_("The model class of the Queens (light, medium or heavy)."),
+GENERAL_HELP = {"slowTestSeconds": N_("Show measured individual tests at or above this duration in log details; advisory only, no automatic retry or blocking."), "language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("Failed attempts trigger diagnosis before another attempt or a more expensive model is authorized."),
+                "owner": N_("How the Queens and Agents call you in their texts."), "queenClass": N_("Heavy is recommended for Queen coordination. Configure a capable model and suitable reasoning effort for this class in Providers; existing choices are preserved."),
+                "diagnosisClass": N_("Heavy is recommended for question, package and integration diagnosis; model and effort come from Providers. Higher effort can cost more; class alone does not guarantee quality."),
                 "beesPerQueen": N_("How many Agents a Queen may have running at the same time."),
                 "maxConcurrentCompileChecks": N_("The most compile checks that run at the same time on this computer, across all projects and Queens, also for several plans of one project.")}
 SETTING_HELP.update({"escalateAfter": N_("Overrides the General value for this Project."), "allowedTools": N_("Commands agents of this Project may run without asking.")})
@@ -91,7 +92,7 @@ HIDDEN_KEYS = ("name", "workspace", "preferredProvider", "codeRepo", "repo", "wo
 # Owner decision 742: a field is as wide as its kind of value needs, never the full window width.
 SHORT_WIDTH, PATH_WIDTH, LABEL_WIDTH = 20, 60, 34   # characters: short values, paths and commands (they scroll inside), the label column
 SHORT_KEYS = frozenset(("name", "colour", "color", "priority", "integrationBranch", "remoteName", "nextVersion", "worktreePrefix", "owner", "language", "model", "effort",
-                        "slots", "protocol", "outputFormat", "use", "beeMode", "queenClass", "source", "hives", "roundMinutes", "timeoutSeconds", "checkHours", "version", "branch"))
+                        "slots", "protocol", "outputFormat", "use", "beeMode", "queenClass", "diagnosisClass", "source", "hives", "roundMinutes", "timeoutSeconds", "checkHours", "version", "branch"))
 
 
 def field_width(key, value) -> int:
@@ -184,7 +185,7 @@ def apply_build(data, cores_text, parallel_text, ram_text, cores=None):
         if value < low or (high is not None and value > high):
             raise ValueError(tr("%s: a whole number from %d to %d is expected", tr(label), low, high) if high is not None else tr("%s: a whole number from %d up is expected", tr(label), low))
         return value
-    n_cores = whole(cores_text, N_("CPU cores per build"), 1, cores)
+    n_cores = whole(cores_text, N_("Total CPU budget for builds and checks"), 1, cores)
     parallel = whole(parallel_text, N_("Parallel builds"), 1)
     try:
         ram = float(str(ram_text).strip().replace(",", "."))
@@ -333,6 +334,9 @@ def check(data, machine=True) -> list:
     for key, label in (("remoteName", "Remote name"), ("integrationBranch", "Integration branch")):
         if data.get(key) and not re.fullmatch(r"[\w][\w./-]*", str(data[key])):
             problems.append(tr("%s: letters, digits and . / - _ are expected, starting with a letter or digit", tr(label)))
+    duration = data.get("slowTestSeconds", 10)
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not math.isfinite(duration) or duration <= 0:
+        problems.append(tr("Slow test threshold: a finite number above zero is required"))
     limit = data.get("maxConcurrentCompileChecks")
     if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
         problems.append(tr("%s: a whole number from %d up is expected", tr(N_("Max concurrent compile checks")), 1))
@@ -372,7 +376,7 @@ def keep_legacy_entry(data, old):
     if old.get("capabilitiesVersion"):
         return
     use_kept = old.get("use") != "capability-only" or data.get("use") == "preferred"
-    if set(data.get("capabilities") or []) != set(scheduler.provider_capabilities(old)) or not use_kept:
+    if set(data.get("capabilities") or []) != set(scheduler.declared_capabilities(old)) or not use_kept:
         data["capabilitiesVersion"] = 1
         return
     for key in ("capabilities", "use"):
@@ -565,3 +569,6 @@ def parse_typed(text, like=None):
             except ValueError:
                 pass
     return text
+
+GENERAL_LABELS["ramReserveMb"] = N_("Minimum free RAM for agent starts (MiB)")
+GENERAL_HELP["ramReserveMb"] = N_("Agent starts wait below this threshold. Builds have a separate RAM threshold. An explicit minFreeRamGB value overrides this fallback.")

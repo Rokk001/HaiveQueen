@@ -13,6 +13,42 @@ from haivequeen import web_auth, web_server
 
 
 class WebRoutesTests(unittest.TestCase):
+    def test_question_details_require_authenticated_get(self):
+        self.configure()
+        self.assertEqual(self.request('GET', '/api/questions/detail?id=1')[0], 401)
+        status, _, body = self.request('GET', '/api/questions/detail?id=1', headers=self.login())
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['action'], 'questions/detail')
+
+    def test_draft_mutations_require_owner_session_and_csrf(self):
+        self.configure()
+        for action in ('plans/create', 'plans/save'):
+            self.assertEqual(self.request('POST', '/api/' + action, {})[0], 401)
+        headers = self.login()
+        for action in ('plans/create', 'plans/save'):
+            self.assertEqual(self.request('GET', '/api/' + action, headers=headers)[0], 404)
+            self.assertEqual(self.request('POST', '/api/' + action, {}, {'Cookie':headers['Cookie']})[0], 403)
+            self.assertEqual(self.request('POST', '/api/' + action, {}, headers)[0], 200)
+
+    def test_release_history_and_promotion_require_owner_session_and_csrf(self):
+        self.configure()
+        self.assertEqual(self.request('GET', '/api/releases?project=demo')[0], 401)
+        self.assertEqual(self.request('POST', '/api/releases/promote', {})[0], 401)
+        headers = self.login()
+        self.assertEqual(self.request('GET', '/api/releases?project=demo', headers=headers)[0], 200)
+        self.assertEqual(self.request('GET', '/api/releases/promote', headers=headers)[0], 404)
+        self.assertEqual(self.request('POST', '/api/releases/promote', {}, {'Cookie': headers['Cookie']})[0], 403)
+        self.assertEqual(self.request('POST', '/api/releases/promote', {'tag': 'v1.0.0-dev.1', 'confirmed': True}, headers)[0], 200)
+
+    def test_plan_logs_and_provider_release_routes_remain_available(self):
+        self.configure()
+        headers = self.login()
+        for action in ('plan/detail', 'plan/step-log', 'git-login/providers', 'releases'):
+            with self.subTest(action=action):
+                status, _, body = self.request('GET', '/api/' + action, headers=headers)
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body)['action'], action)
+
     def test_disconnected_client_does_not_report_server_failure(self):
         handler = object.__new__(web_server._Handler)
         with patch.object(handler, 'handle_one_request', side_effect=BrokenPipeError('peer closed')):
@@ -103,6 +139,10 @@ class WebRoutesTests(unittest.TestCase):
 
     def test_https_proxy_login_and_csrf_keep_external_origin(self):
         self.configure()
+        from haivequeen import settings as store
+        configured = store.load_raw(self.path)
+        configured['web']['trustedProxies'] = ['127.0.0.1']
+        store.save_file(self.path, configured)
         proxy = {'Host': 'hive.example.test', 'Origin': 'https://hive.example.test', 'X-Forwarded-Proto': 'https'}
         self.assertNotIn('unencrypted', self.request('GET', '/login', headers=proxy)[2])
         status, response, body = self.request('POST', '/login', {'username': 'operator', 'password': 'secret'}, proxy)

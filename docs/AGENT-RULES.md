@@ -20,3 +20,51 @@ HaiveQueen creates or reuses the package worktree at Agent start. Its branch is 
 ## Plans with nothing left to integrate
 
 A plan that changes no tracked file of the code repo has no plan branch and no queue row on purpose; a plan whose branch is already fully in the integration branch has nothing left to integrate either. Such a plan closes the same way as an integrated one, without integration: the Queen reports with `bzz ready` (no new queue row, no compile check, no Build or Deploy step) and ends. A fresh check agent passes the report, then the owner check asks to check the result of the plan (unless the plan header says `owner_check = "none"`), and acceptance sets DONE. No "queen-ended" question is filed. A failed check or a rejection sends the plan back to a new Queen with the open points.
+
+## Queen and Agent startup context: files and load paths
+
+This section documents the existing startup contract for maintenance and planning. Token economy comes first, context conservation second: consult the named loader functions before changing instructions; do not add duplicate rules or assume that a referenced document is automatically embedded. This document is not automatically embedded by the normal Queen/Agent startup loaders. A project instruction may reference it for subsequent reading.
+
+### Markdown source files
+
+| Source | Queen | Agent (separate process) |
+| --- | --- | --- |
+| `roles/queen.md` | Rendered role text on every start | Not loaded |
+| `roles/bee.md` | Not loaded as her role | Rendered role text on every start |
+| `roles/queen-cut.md` | Appended when the plan has a cut status and needs decomposition | Not loaded |
+| Submitted plan `.md`, resolved against the project workspace | Full text | Not automatically embedded; receives its package task, numbered steps and needed paths |
+| Plan state `<name>-STATE.md` beside the plan (drop a trailing `-PLAN` from the plan stem) | Full available text; predecessor handoff extracted into its own section without duplication | Not automatically embedded |
+| Project repository `AGENTS.md` | If tracked, nonempty and enabled | Same |
+| Project repository `CLAUDE.md` | If tracked, nonempty and enabled | Same |
+| Upstream repository `AGENTS.md` | If upstream rules are enabled and the file is available and enabled | Same |
+| Upstream repository `CLAUDE.md` | If upstream rules are enabled and the file is available and enabled | Same |
+
+Project rule selection is defined by `profile.rule_entries` and `profile.project_rules`. Identical rule texts are deduplicated. Upstream rules come from the configured `upstreamRepo` folder, otherwise the last fetched default branch of the `upstream` remote; the folder takes precedence. These are rules of the project being worked on, not automatically HaiveQueen's own repository rules. README files and files merely mentioned by rules are not recursively embedded by this loader.
+
+The CLI may load instructions itself: Claude loads `CLAUDE.md`; Codex and OpenCode load `AGENTS.md`. When that file is tracked in the working directory, HQ records it as provider-loaded instead of copying it again. Disabling HQ's injection does not prevent a CLI from loading its own instruction file. This table describes HQ's explicit inputs, not an exhaustive inventory of provider-native instruction discovery.
+
+### Generated files and delivery
+
+1. `roles.role_text` reads the selected role file and substitutes its task/settings placeholders. `bees.queen_instructions` and `bees.bee_prompt` construct the respective role text. `hives.schedule_round` adds the conditional `queen-cut.md` text.
+2. `loop._do_start` writes `<run directory>/prompt.md`: role/task text, a reference to the run's `HANDOFF` signal, and the applicable additional context. `HANDOFF` is a signal file, not another Markdown instruction file.
+3. For the Queen, `profile.queen_load` appends the plan, state and predecessor handoff, active plan/project decisions, and older owner answers not already represented by decisions. Decisions and answers come from runtime data, not extra `.md` files. The start task also includes open questions and applicable integration/provider settings.
+4. For non-Claude process providers, additional project rule text is included in `prompt.md`. For Claude, `agent_runner` writes it to `<run directory>/rules.md`, exposed through the provider's `{rules}` argument for system-prompt delivery. Files the CLI loads itself are excluded from this copied text.
+5. `agent_runner.report_prompt` gives the CLI a short instruction to read `prompt.md` completely, plus reporting commands. Thus plan and state contents embedded there are read after the initial invocation; they are not merely optional path references.
+6. For a native subagent, `bees._start_process_locked` stores the rendered Agent prompt in the run directory as `handoff-prompt.md` and returns its path, assigned worktree/branch and Git environment to the Queen for forwarding. The durable handoff is retrievable with `agent handoff`; `agent launched` acknowledges the actual native launch and consumes a scoped repair grant. An explicitly unstarted interruption preserves the unused grant; an unknown launch remains reserved. This branch does not use `loop._do_start` or generate separate `prompt.md`/`rules.md` files. Provider-native inherited context is separate from this returned payload.
+
+`roles/fix.md`, `roles/diagnosis.md`, `roles/ready-check.md` and `roles/acceptance.md` serve other agent roles; they are not additional normal Queen/Agent startup files. The acceptance role and its evidence-scoped loading are described in [ACCEPTANCE-QUESTIONS.md](ACCEPTANCE-QUESTIONS.md).
+
+Follow-up package diagnoses additionally load `roles/package-continuation.md` through `package_diagnosis.prompt` and `roles.role_text`, only when a previous report exists. It requests the latest repair assessment and bounded next step; normal Queen and Agent starts do not load this file. See [PACKAGE-DIAGNOSIS-PROGRESS.md](PACKAGE-DIAGNOSIS-PROGRESS.md).
+
+Package diagnoses receive a retrieval reference to the authoritative `roles/repair-contract.md` through `package_diagnosis.prompt`. Accepted technical grants append `roles/repair-result.md` only to the diagnosed repair Agent through `package_diagnosis.accept`. Ordinary Agent starts do not load these protocols. The Queen's short receipt-review and result-routing instruction lives in `roles/queen.md`. A verified behavior-changing repair in an unfinished package uses outcome `progress`, with baseline, unchanged-regression and full-workflow progress evidence; observations or unused components alone do not qualify.
+
+Implementation references: `haivequeen/roles.py` (`role_text`), `haivequeen/bees.py` (`bee_prompt`, `queen_instructions`, `_start_process_locked`), `haivequeen/hives.py` (`schedule_round`), `haivequeen/profile.py` (`rule_entries`, `project_rules`, `queen_load`), `haivequeen/plans.py` (`state_file_path`), `haivequeen/loop.py` (`_do_start`), and `haivequeen/agent_runner.py` (`report_prompt` and rules-file construction). Recheck these paths when changing the startup contract; keep this section aligned with the implementation.
+
+### Requirement-bound repair review
+
+A new diagnostic workflow is independently checked once against the package's submitted
+requirements and active decisions before retry dispatch. HQ reuses that verdict for the
+same workflow across rounds and restarts. The checker receives only package requirements,
+workflow and retrieval references; it neither implements the plan nor launches production
+work. Requirements coverage, descriptive checkpoint objects and legacy transition are
+specified in [Package diagnosis progress](PACKAGE-DIAGNOSIS-PROGRESS.md#requirement-bound-workflows-protocol-5).

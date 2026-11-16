@@ -7,6 +7,7 @@ a lock starts a triage agent (D5), and at the start running agents are re-attach
 The agent process itself is `haivequeen.agent_runner` (see docs/S13-S14-INTERFACE.md).
 """
 import faulthandler
+import errno
 import json
 import math
 import os
@@ -326,7 +327,7 @@ def _state_summary(env, quiet=False) -> dict:
 _hive_schedule_guard = threading.Lock()
 _abandoned_hive_locks = set()
 HIVE_LOCK_HEARTBEAT = 5.0   # seconds between two heartbeats of the holder
-HIVE_LOCK_EXPIRY = 60.0     # a lock whose last heartbeat is older than this is abandoned
+HIVE_LOCK_EXPIRY = 60.0     # diagnostic heartbeat threshold; never proof of a dead holder
 
 
 def _read_hive_lock(path: Path):
@@ -346,11 +347,72 @@ def _read_hive_lock(path: Path):
 
 
 def hive_lock_abandoned(pid: int, age: float) -> bool:
-    """A lock is abandoned when its holder is gone or its heartbeat has expired."""
-    return not osplat.process_alive(pid) or age > HIVE_LOCK_EXPIRY
+    """Only a dead holder permits recovery; a stalled heartbeat is not proof."""
+    return not osplat.process_alive(pid)
 
 
-def _try_hive_lock(path: Path, reason: str):
+def _acquire_hive_guard(path: Path, deadline: float):
+    """Hold an OS lock through scheduling and recovery; process exit releases it.
+
+    The guard file must never be unlinked: every contender locks the same inode.
+    The JSON lock remains for diagnostics and compatibility with older holders.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path) + '.guard', os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        while True:
+            try:
+                if os.name == 'nt':
+                    import msvcrt
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fd
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                    raise
+                if time.monotonic() >= deadline:
+                    held = _read_hive_lock(path)
+                    pid, why = held[:2] if held else ('unknown', '')
+                    raise TimeoutError('Plan scheduling is busy: the lock is held by process %s%s' %
+                                       (pid, ' (%s)' % why if why else '')) from None
+                time.sleep(0.1)
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _recover_preboot_hive_lock(path: Path, boot) -> bool:
+    """Archive unchanged unreadable metadata predating boot, under the OS guard.
+
+    A missing heartbeat or an old timestamp alone is insufficient. The reboot
+    proves the previous owner cannot survive; the guard excludes current owners.
+    Recent/valid metadata and unavailable boot evidence remain protected.
+    """
+    if boot is None:
+        return False
+    try:
+        before = path.stat()
+        if before.st_mtime >= boot.timestamp():
+            return False
+        raw = path.read_bytes()
+        if _read_hive_lock(path) is not None:
+            return False
+        after = path.stat()
+        if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+            return False
+        if path.read_bytes() != raw:
+            return False
+        import uuid
+        path.rename(path.with_name(path.name + '.recovered-' + uuid.uuid4().hex))
+        return True
+    except OSError:
+        return False
+
+
+def _try_hive_lock(path: Path, reason: str, boot=None):
     """Try once to take the scheduling lock. Returns None on success, else (pid, reason) of the holder (pid -1: unreadable)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     for _ in range(3):
@@ -359,26 +421,25 @@ def _try_hive_lock(path: Path, reason: str):
         except FileExistsError:
             held = _read_hive_lock(path)
             if held is None:
-                try:
-                    if time.time() - path.stat().st_mtime <= HIVE_LOCK_EXPIRY:
-                        return -1, ""   # just created and not written yet
-                except FileNotFoundError:
+                if not path.exists():
                     continue
-                except OSError:
-                    return -1, ""
-                held = (-1, "", HIVE_LOCK_EXPIRY + 1)   # damaged and stale
+                if _recover_preboot_hive_lock(path, boot):
+                    continue
+                return -1, ""   # unknown ownership must not authorize recovery
             pid, why, age = held
             if pid != -1 and not hive_lock_abandoned(pid, age):
                 return pid, why
             try:
                 again = _read_hive_lock(path)
-                if (again is None and pid == -1) or (again is not None and again[:2] == held[:2]):
+                if again is not None and again[:2] == held[:2] and hive_lock_abandoned(again[0], again[2]):
                     path.unlink()   # only the lock that was judged abandoned
             except OSError:
                 return pid, why
             continue
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(json.dumps({"pid": os.getpid(), "reason": reason}))
+            handle.flush()
+            os.fsync(handle.fileno())
         return None
     return -1, ""
 
@@ -397,7 +458,9 @@ def _hive_heartbeat(path: Path, stop: threading.Event) -> None:
 def hive_schedule_lock(timeout: float = 30.0, reason: str = ""):
     """Serialize Plan scheduling; the lock holds the holder's process id, its reason and a heartbeat.
 
-    A lock of a dead holder or with an expired heartbeat is taken over; a wait that gives up names the holder and what it is doing."""
+    A dead holder or unreadable metadata proven to predate boot is recovered.
+    An OS guard serializes recovery and the whole
+    scheduling section; a wait that gives up names the holder and what it is doing."""
     path = osplat.data_dir() / "hive-schedule.lock"
     if not reason:
         try:
@@ -413,7 +476,10 @@ def hive_schedule_lock(timeout: float = 30.0, reason: str = ""):
                            (os.getpid(), " (%s)" % why if why else ""))
     stop = threading.Event()
     beat = None
+    guard = None
     try:
+        guard = _acquire_hive_guard(path, deadline)
+        boot = system_boot_time()
         while True:
             if path in _abandoned_hive_locks:
                 try:
@@ -425,11 +491,13 @@ def hive_schedule_lock(timeout: float = 30.0, reason: str = ""):
                     _abandoned_hive_locks.discard(path)
                 except OSError:
                     pass
-            holder = _try_hive_lock(path, reason)
+            holder = _try_hive_lock(path, reason, boot=boot)
             if holder is None:
                 break
             if time.monotonic() >= deadline:
                 pid, why = holder
+                if pid == -1:
+                    raise TimeoutError("Plan scheduling blocked: lock metadata is unreadable; ownership cannot be verified")
                 raise TimeoutError("Plan scheduling is busy: the lock is held by process %s%s" % (
                     pid if pid != -1 else "unknown", " (%s)" % why if why else ""))
             time.sleep(0.1)
@@ -449,6 +517,8 @@ def hive_schedule_lock(timeout: float = 30.0, reason: str = ""):
                 _abandoned_hive_locks.add(path)
                 raise
     finally:
+        if guard is not None:
+            os.close(guard)
         _hive_schedule_guard.release()
 
 
@@ -565,7 +635,9 @@ def _do_start(c, a, forced_pick=None) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     pf = run_dir / "prompt.md"
     hf = run_dir / "HANDOFF"
-    if phase == "fix":   # the fix agent has no role file of its own: its task is the whole prompt
+    if pkg == "OWNER-ACCEPTANCE" and phase == "verify":
+        hdr = "You prepare an acceptance description from existing evidence. Read-only; do not update plan state.\n\n"
+    elif phase == "fix":   # the fix agent has no role file of its own: its task is the whole prompt
         hdr = "You are the fix agent %s. Language: write all free text for the owner in %s.\n\nTASK\n\n" % (nm, roles.language(env.settings))
     elif phase in ("bee", "queen"):   # the role text (queen.md, bee.md) is the start of the prompt itself
         hdr = ""
@@ -582,6 +654,8 @@ def _do_start(c, a, forced_pick=None) -> int:
     if phase == "queen":
         handoff = ("After each completed step check %s. When it exists, do not start new Agents, "
                    "wait for running Agents, finish your current step, record the handoff in the plan state and end." % hf)
+    elif pkg == "OWNER-ACCEPTANCE" and phase == "verify":
+        handoff = "If %s exists, end without changing any project file or owner decision." % hf
     predecessors = [x for x in runtime.list_agents(env.conn, env.name, 'all') if x.get('phase') == 'queen' and x.get('plan_path') == plan and x.get('person')]
     loaded = ""
     if phase in ("bee", "queen", "fix"):   # what a Queen and a Bee load is defined in profile.py; the project rules are complete, never a selection

@@ -37,7 +37,8 @@ DEFAULT_SETTINGS = {
     "owner": "Owner",
     "hives": 2,
     "excludedProviders": [],
-    "queenClass": "medium",
+    "queenClass": "heavy",
+    "diagnosisClass": "heavy",
     "beesPerQueen": 3,
     "roundMinutes": 5,
     "escalateAfter": 3,
@@ -144,7 +145,7 @@ def resolve_agent_class(settings: dict, phase: str, requested: str, failures: in
 
 # ---- providers ----
 
-def provider_capabilities(p):
+def declared_capabilities(p):
     capabilities = [canonical_capability(c) for c in (p.get("capabilities") or [])]
     if not p.get("capabilitiesVersion"):
         if p.get("use") != "capability-only" and "Coding" not in capabilities:
@@ -152,6 +153,13 @@ def provider_capabilities(p):
         if not servers.is_local(p) and "Queen" not in capabilities:
             capabilities.append("Queen")
     return list(dict.fromkeys(capabilities))
+
+
+def provider_capabilities(p):
+    capabilities = declared_capabilities(p)
+    from . import mcp_setup
+    verified = set(mcp_setup.status(p)["available"])
+    return [c for c in dict.fromkeys(capabilities) if c in mcp_setup.NATIVE or c in verified]
 
 
 def capability_thresholds(p):
@@ -164,7 +172,7 @@ def capability_thresholds(p):
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
             raise ValueError(tr("provider %s: capability threshold must be a whole percent from 1 to 100", p.get("name", "")))
         result[canonical_capability(capability)] = value
-    for capability in provider_capabilities(p):
+    for capability in declared_capabilities(p):
         result.setdefault(capability, 100)
     return result
 
@@ -386,13 +394,19 @@ def provider_reserve(provider: dict, conn=None, limits=None, now=None):
     """The quota reserve of a provider from both usage windows: weekly quota x 5-hour quota (the 5-hour one counts at most 1.0).
 
     None for a provider without limit (+99 %); a used-up window gives 0 (no new work until it resets, capability packages included).
-    A passed reset counts as reset; an unknown reading counts as a full week free. A kept reading of a failed Claude check counts with both windows.
+    Real quota-managed providers require a fresh successful observation before
+    historical percentages can authorize starts. Explicit test limits and the
+    isolated runtime override retain their synthetic quota behavior.
     `now` is the one clock reading a ranking shares, so equal usage gives exactly equal reserves."""
     from . import reserve
     source = str(provider.get("limit") or "") if not isinstance(provider.get("limit"), dict) else str((provider.get("limit") or {}).get("source", ""))
     p = {**provider, "limit": source}
     if without_limit(p):
         return None
+    if source in ('claude', 'codex') and limits is None and not os.environ.get('BZZ_PROVIDER_LIMITS_FILE') and not os.environ.get('BZZ_RUNTIME_OVERRIDE'):
+        from . import usage
+        if not usage.quota_verified(conn, p, now):
+            return 0.0
     lim = provider_limit(p, conn, limits)
     now = time.time() if now is None else now
     weekly = reserve.window_quota(lim["FreePct"], reset_epoch=now + float(lim["Hours"]) * 3600.0, now=now)
@@ -496,8 +510,41 @@ def capability_available(providers: list, needs: list) -> bool:
     return any(p["slots"] > 0 and ("Confidential data" not in [canonical_capability(n) for n in needs] or _local_confidential(p)) and all(canonical_capability(n) in [canonical_capability(c) for c in p["capabilities"]] for n in needs) for p in providers)
 
 
+def provider_block_reason(p, cls, needs, free, conn=None, limits=None, now=None):
+    """Explain selection gates without probing providers or changing their state."""
+    from . import usage
+    if p.get('unavailable') or not p.get('enabled', True):
+        return 'provider ' + str(p.get('unavailable') or 'disabled')
+    if p.get('login') is False:
+        return 'not ready: ' + str(p.get('notReady') or 'login or connection unavailable')
+    if p['slots'] <= 0:
+        return 'no slots configured (0)'
+    if int(free.get(p['name'], 0)) <= 0:
+        return 'all %s slots occupied' % p['slots']
+    if not (p.get('classes', {}).get(cls) or {}).get('model'):
+        return 'no model configured for class ' + cls
+    needs = [canonical_capability(n) for n in (needs or []) if n]
+    if 'Confidential data' in needs and not _local_confidential(p):
+        return 'confidential work requires a local provider'
+    missing = [n for n in (needs or ['Coding']) if n not in p['capabilities']]
+    if missing:
+        return 'missing capability: ' + ', '.join(missing)
+    if p.get('limit') in ('claude', 'codex') and limits is None and not os.environ.get('BZZ_PROVIDER_LIMITS_FILE') and not os.environ.get('BZZ_RUNTIME_OVERRIDE'):
+        reason = usage.quota_block_reason(conn, p, now)
+        if reason:
+            return reason
+    if threshold_reached(p, needs, conn, limits, now):
+        thresholds = p.get('capabilityThresholds') or {}
+        threshold = min((thresholds.get(n, 100) for n in (needs or ['Coding'])), default=100)
+        return 'usage reached the required capability threshold (%s%%)' % threshold
+    resv = provider_reserve(p, conn, limits, now)
+    if resv is not None and resv <= 0:
+        return 'quota exhausted'
+    return ''
+
+
 def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "", prefer: str = "",
-                    protocol: str = "", conn=None, limits=None):
+                    protocol: str = "", conn=None, limits=None, rejected=None):
     """Return the provider that gets a task of this class, or None.
 
     Candidates have slots above 0 and a free slot, the class in their entry, all needed capabilities (a package that needs one goes
@@ -512,24 +559,13 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
     cand = []
     now = time.time()
     for idx, p in enumerate(providers, 1):
-        if p["slots"] <= 0 or int(free.get(p["name"], 0)) <= 0:
+        reason = ('protocol mismatch: requires ' + protocol if protocol and p['protocol'] != protocol else
+                  provider_block_reason(p, cname, needs, free, conn, limits, now))
+        if reason:
+            if rejected is not None:
+                rejected[p['name']] = reason
             continue
-        if protocol and p["protocol"] != protocol:
-            continue
-        model = (p["classes"] or {}).get(cname)
-        if not (model and model.get("model")):
-            continue
-        if "Confidential data" in needs and not _local_confidential(p):
-            continue
-        if any(n not in p["capabilities"] for n in needs):
-            continue
-        if "Coding" not in p["capabilities"] and not needs:
-            continue
-        if threshold_reached(p, needs, conn, limits, now):
-            continue
-        resv = provider_reserve(p, conn, limits, now)   # the quota reserve from both usage windows; None without limit (+99 %)
-        if resv is not None and resv <= 0:
-            continue   # a used-up window blocks every package until it resets, capability packages included
+        resv = provider_reserve(p, conn, limits, now)
         cand.append((p, idx, resv))
     if not cand:
         return None

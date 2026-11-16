@@ -139,7 +139,7 @@ always names an eligible provider and includes the current provider among the
 choices. The interface labels are Start, Stop gracefully, Force stop, Resume,
 Cancel plan, Restart Queen on provider, and web Stop/Restart.
 
-Provider logins run in the existing isolated profile with captured stdout and
+Provider logins run in the lean profile with captured stdout and
 stdin. Codex uses device login. Claude uses its login command, and browser
 launches are returned as URLs for the remote user. Custom CLIs retain their
 configured login command. Render output as text and links as HTTP(S) anchors.
@@ -167,3 +167,155 @@ The upstream connection can use HTTP. HaiveQueen uses a single `X-Forwarded-Prot
 Provider settings use the same access-aware form for adding and editing: Subscription shows shared login, API key shows the masked key, and Local LLM shows address, optional key, context window and connection test. Models, Use and a closed Advanced section follow. Switching access type retains type-specific drafts until save/reload; only the selected type is saved. Each enabled capability has its own 1–100 percent used-quota threshold beside its switch.
 
 Codex quota refresh reads account metadata using `account/rateLimits/read` without creating a model turn. A fallback session reading retains its observation time rather than appearing freshly measured. Dashboard usage labels distinguish used and remaining quota from the time-adjusted quota reserve. The metadata refresh runs in the background even when the orchestration loop is stopped.
+
+## Dashboard and live output
+
+The dashboard presents projects, plans, Queens, Agents, model limits, token totals, system load, questions and logs. Plan rows open plan details and the provider-specific restart menu. Git connections have their own page, storing credentials independently per connection. Releases show published versions and integration results.
+
+`Enter` on a Plan row opens a read-only window with the last 300 lines of the running Queen of that Plan (the latest one when none runs); on a Queen or Agent row it shows that agent. The window reloads every 2 seconds, follows the end of the text, and opening the same agent again focuses its window. The text is `milestones.txt` in the agent's run folder (`<data>/runs/<project>/<agent>/`); `runner.log` next to it holds the plain runner output.
+
+Settings workflows and every field are in [Settings reference](SETTINGS.md). Provider authentication, connection tests, benchmarks and profile setup use the shared backend described in [Profile](PROFILE.md).
+
+## Additional browser operations
+
+Plan details include packages, requirements, pipeline steps and repair history. Open a step to inspect its bounded, paginated log; logs retain execution identity and exit information. Log filters, copy buttons and live output are read-only views. Long operations expose job status and failures without blocking the page.
+
+Additional authenticated endpoints use the same session and CSRF rules:
+
+| Route | Purpose |
+| --- | --- |
+| GET `plan/detail`, `plan/step-log` | Plan evidence and paginated pipeline output. |
+| GET `settings/view` | Editable view metadata, rules, defaults and provider models. |
+| GET `git-login/providers` | Available Git connections and supported authentication. |
+| POST `git-login/token` | Save a connection's token; Gitea also requires an HTTPS origin. |
+| POST `provider/mcp` | Confirm, import and verify the provider's MCP configuration. |
+| POST `provider/updates` | Check the installed provider CLI for updates. |
+| POST `tools/install` | Install the personal /bzz inbox command as a background job. |
+| GET `releases` | Release history for the selected project. |
+| POST `releases/promote` | Confirm promotion of a selected prerelease tag. |
+
+Git device sign-in is not implemented; the interface uses access tokens. [Release semantics](OPERATIONS.md#releases) and [MCP/benchmark behavior](PROFILE.md#tools-mcp-and-start-context-measurement) are documented separately.
+
+## Plan authoring and central Questions workflow
+
+Plans offers **New plan** once startup project data is available; the control
+stays disabled until that state arrives. With no registered projects, it asks you
+to add one rather than opening an empty project target. Choose a project, enter a project-relative `.md` filename
+matching its displayed plan patterns, and type Markdown or import a local `.md`
+file. Fresh new plans offer a short template in the interface language: a Markdown
+title and one line prompting the goal and desired result. Replace these with your
+plan; the title heading is required. Continuing or editing a draft and importing
+a file preserve their existing content instead of inserting the template. Import reads the content only; it does not upload or submit automatically.
+**Save draft** creates a DRAFT; **Submit plan** explicitly invokes the existing
+`plan/start` transition to SENT. Existing DRAFT plans offer **Edit draft** in their
+detail view. Running plans are not editable. Unsaved content survives list polling
+and closing/reopening the editor in the current page. Further edits replace the
+saved message with **Unsaved changes** and disable submission until saved again; leaving the page warns about
+unsaved content. A save uses the server revision to reject concurrent changes.
+Project and filename are locked while a save is in flight, so its response stays
+attached to the original target. The in-flight lock belongs to the draft and
+survives closing/reopening its editor, blocking a duplicate save. Completion
+updates the currently open editor without reopening a closed dialog or replacing
+newer text. A failed save restores their prior editability;
+Markdown edits made during saving remain unsaved and must be saved before submission.
+
+Plan details link relevant open questions and acceptance checks to the central
+Questions view. Following a question link scrolls to and focuses that question;
+background refreshes do not repeat this navigation. Each question links back to its plan. Questions separates open
+items from answered history, including saved answer, author and date. Kind labels
+use actual question metadata (acceptance checks, decisions when supplied, ordinary
+questions otherwise); arbitrary item names are not presented as decisions.
+The first view shows a short preview; **Full question and report** retains the
+entire original text, and **Context and evidence** exposes available evidence.
+
+Answers, project scope and rejected package selections survive polling and view
+changes in the current page. Project scope is explicitly opt-in: unchecked applies
+to the plan, checked stores a project decision for future work. Acceptance **Save
+note** records feedback without accepting the result. **Accept** and **Reject**
+remain separate confirmed actions; rejection optionally identifies packages for
+rework, with an empty package list rejecting the overall result. The plan action
+**Release readiness gate** explicitly overrides the readiness check; it does not
+publish a software release. Existing owner command semantics remain unchanged.
+
+
+### Project and plan conversations
+
+Questions is a messenger-style master/detail view using the existing question
+records. The left side groups plans by project, showing pending counts and a
+preview. **Needs you**, **All**, and **Completed** filter the conversation list;
+Completed means every recorded question in that conversation is answered, not that
+the plan itself is DONE. Each conversation shows its real project, plan title and
+latest recorded answer where available. A compact expandable timeline orders the
+recorded questions and current answers by timestamp. Acceptance notes expose only
+the latest stored note; the interface does not imply a complete note history.
+
+Selecting a conversation in the sidebar retains the chosen filter. Opening Messages
+from Plans can switch to All to reveal that plan. One pending question at a time has
+a composer. When more than one question is pending, a selector lists all pending questions
+of the selected plan, preserving independent answer drafts when switching. Full
+reports, recommendations and evidence remain expandable, project-wide scope is
+under **Answer options**, and optional rejected package selection is under
+**Specific packages**. **Request changes** uses the existing owner rejection action;
+**Accept** and **Save note** retain their distinct semantics. Records not open are
+read-only. There is no invented agent dialogue or free-message backend.
+
+Plans cards show pending question and acceptance counts with direct **Answer question**
+or **Review result** actions. They open the same conversation as Questions; plans without pending
+questions can open their recorded history when one exists. Questions and Plans share the existing
+`questions?history=1` response. The plan link is offered only when that plan exists
+in the current plan list. On narrow screens, selecting a thread replaces the list
+with the conversation. The back button names the active filter (for example,
+**Back to Needs you**) and returns to that same filtered list; the conversation
+header also displays the active view. Explicit **Project** and **Plan** labels
+identify the full real names in the sidebar and conversation header, wrapping
+long names instead of hiding the scope.
+
+### Update header labels
+
+The header labels the running version as `Running v<version>`. When an update is available, the action reads `Update to v<version>`; the target version is not repeated as a separate status label. Version labels normalize an existing `v` prefix without changing the version sent to the install API. Installation, failure and current-version status messages remain visible.
+
+While installation is pending, the header reads the target from `updates.installing.version`. The `installing` object also contains scheduling metadata and must not be rendered as text. The update action remains hidden and checking remains disabled until installation finishes.
+
+Update status polling also detects a worker that died after creating its history row but before recording completion. A dead lock PID, or a PID now belonging to another command, ends the displayed installation as failed and enables checking again. A live worker with an unreadable command line is left alone. This reconciliation never stops processes, changes update history or claims successful installation.
+
+The update status hides failed attempts targeting an older version than the installed checkout, while preserving their history. Offers at or below the installed version are hidden. A plan with no pending questions also ignores an obsolete answer-state blocker; this display correction does not start the plan.
+
+Global plan controls expose eligible target counts in `state.controls.plans`. The menu disables each action when its count is zero or unavailable. Counts use the same server selection as the confirmation preview, including global-stop membership and the live-work guard for Resume. Each dashboard refresh updates availability; confirmation still revalidates the selected plans before execution.
+
+Scheduling-lock recovery preserves malformed metadata as `hive-schedule.lock.recovered-<unique-id>` only when its unchanged timestamp predates a known system boot and the exclusive OS guard is held. This recovers crash-damaged lock files without terminating processes. Recent or unverifiable metadata and live holders remain blocking; unreadable metadata is reported explicitly rather than attributing it to an unknown process. New lock metadata is flushed to disk. Existing production locks are not modified by installing this code; recovery occurs on the next acquisition by the updated scheduler.
+
+### Plans overview
+
+Plans is an actionable list. Each card shows the real Markdown title (falling back
+to its file name), the explicitly labelled project, and a readable lifecycle status.
+Technical fields such as Started, Waiting and Error remain available in plan details;
+a WAITING plan also shows its recorded waiting reason on its card. Completed means
+the plan is DONE, with no additional claim about publication or deployment.
+
+Search covers title, file name, path and project without case sensitivity. Visible
+status chips combine with compact project chips: All, Needs you, Drafts, In progress,
+Review and Completed. Paused and Cancelled appear when present. In progress groups
+SENT, PREPARING, QUEUED, RUNNING and WAITING; Needs you uses actual open questions
+matching both project and plan, not plan status. Chip counts reflect the current
+search and project. Until question data arrives, message state is shown as loading
+and Needs you is unavailable, rather than implying zero open questions.
+
+Pending **Answer question(s)** and **Review result(s)** actions open the existing
+plan conversation at the relevant question. The card highlights **Your answer
+needed** or **Your review needed**, retaining the actual lifecycle status beside it;
+**View plan** is the secondary action. Recorded history remains accessible; plans with no questions have quiet text rather
+than an empty conversation button. **Edit draft** fetches the current plan detail
+and revision before editing; a plan that is no longer an editable draft opens its
+details instead. Missing, recovery-blocked or invalid plans offer details, not editing. A **Needs
+attention** label and expandable exact error keep malformed header/class problems
+visible. Attention items and plans with real pending questions come before other
+plans, preserving the existing order within each group.
+**View result** opens review plan details; other plans offer **View plan**.
+
+Before the first successful plan fetch, the overview shows **Loading plans**;
+only a successful empty response shows **No plans yet**. The result count and
+empty state reflect the combined filters. **Clear filters**
+resets search, project and status. Values persist across polling and tab switches
+within the page, search focus and text selection survive polling, and an active
+input composition finishes before redraw. Long plan and project names wrap, and
+cards and action buttons adapt to narrow screens.

@@ -11,14 +11,19 @@ def _help(*args):
 
 
 class OwnerMessagesAndStopDocs(unittest.TestCase):
-    def test_readme_and_docs(self):
-        for rel in ("README.md", "docs/RUNTIME-API.md"):
-            t = (ROOT / rel).read_text(encoding="utf-8")
-            for word in ("owner_messages", "bzz agent stop", "[[stop_agent]]", "bzz dequeen"):
-                self.assertIn(word, t, rel + " lacks " + word)
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("subagent", readme)
-        self.assertIn("explicit owner instruction", readme)
+    def test_owner_messages_are_documented(self):
+        for rel in ("docs/INBOX.md", "docs/RUNTIME-API.md"):
+            with self.subTest(document=rel):
+                text = (ROOT / rel).read_text(encoding="utf-8")
+                self.assertIn("owner_messages", text)
+
+    def test_commands_and_runtime_document_stop_contract(self):
+        for rel in ("docs/COMMANDS.md", "docs/RUNTIME-API.md"):
+            with self.subTest(document=rel):
+                text = (ROOT / rel).read_text(encoding="utf-8")
+                for word in ("bzz agent stop", "[[stop_agent]]", "bzz dequeen",
+                             "subagent", "explicit owner instruction"):
+                    self.assertIn(word, text)
 
     def test_help(self):
         agent = _help("agent")

@@ -12,6 +12,8 @@ from haivequeen import bees, cli, hives
 class ProviderWaitF2(RoundCase):
     def setUp(self):
         super().setUp()
+        from bzztest import verified_tool_evidence
+        verified_tool_evidence(self, {"codex": ["Image generation"]})
         self.plan('IN_PROGRESS', [{'id': 'P1', 'title': 'First'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)
@@ -104,7 +106,7 @@ class ProviderWaitF2(RoundCase):
 
     def test_round_blocker_says_not_ready(self):
         self.prov('codex')['slots'] = 0
-        self.conn.execute("UPDATE agents SET status='done' WHERE name='queen'")
+        self.conn.execute("UPDATE agents SET status='done',pid=NULL WHERE name='queen'")
         bees.wait_for_provider(self.conn, 'testproj', REL, 'claude')
         with mock.patch('haivequeen.servers.readiness', return_value=(False, 'the login is missing')):
             self.round()

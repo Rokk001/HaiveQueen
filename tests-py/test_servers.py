@@ -408,6 +408,57 @@ class Rounds(Base):
         self.assertTrue(env.providers[0]["login"])
 
 
+class HttpReadiness(Base):
+    def test_probe_errors_are_not_ready_and_are_retested(self):
+        server = self.server()
+        for catalog, probe in ((200, 401), (200, 403), (200, 500), (200, 501), (200, 503),
+                               (200, 429), (401, 400), (403, 422), (500, 400), (501, 400), (503, 422)):
+            with self.subTest(catalog=catalog, probe=probe):
+                with mock.patch.object(servers, "_request", side_effect=[(catalog, "{}")] + [(probe, "{}")] * 4):
+                    result = servers.run_test(server)
+                self.assertTrue(result["reachable"])
+                for cli in servers.INTERFACES:
+                    provider = {"server": server, "protocol": cli}
+                    self.assertFalse(servers.readiness(provider, True)[0])
+                    self.assertTrue(servers.needs_retest(provider))
+
+    def test_http_auth_failure_recovers_after_key_is_accepted(self):
+        stub = self.stub({"/v1/responses": 401})
+        server = self.server(address=stub.address)
+        provider = {"server": server, "protocol": "codex"}
+        servers.run_test(server)
+        self.assertFalse(servers.readiness(provider, True)[0])
+        self.assertIn("API key", servers.readiness(provider, True)[1])
+        self.assertEqual(servers.kept(server)["interfaces"]["codex"]["status"], 401)
+        stub.paths["/v1/responses"] = 422
+        self.assertEqual(servers.retest_not_ready([provider]), [server["name"]])
+        self.assertTrue(servers.readiness(provider, True)[0])
+        self.assertFalse(servers.needs_retest(provider))
+
+    def test_empty_request_schema_errors_remain_usable(self):
+        server = self.server()
+        for code in (200, 400, 422):
+            with self.subTest(code=code):
+                with mock.patch.object(servers, "_request", side_effect=[(200, "{}")] + [(code, "{}")] * 4) as request:
+                    servers.run_test(server)
+                for call in request.call_args_list[1:]:
+                    self.assertEqual(call.kwargs["body"], {})
+                for cli in servers.INTERFACES:
+                    provider = {"server": server, "protocol": cli}
+                    self.assertTrue(servers.readiness(provider, True)[0])
+                    self.assertFalse(servers.needs_retest(provider))
+
+    def test_legacy_results_cannot_keep_failed_provider_ready(self):
+        server = self.server()
+        for status in (200, 401, 403, 500, 503):
+            with self.subTest(status=status):
+                servers._keep_result(server["name"], {"fingerprint": servers.fingerprint(server),
+                    "reachable": True, "status": status, "interfaces": {"codex": {"ok": True}}})
+                provider = {"server": server, "protocol": "codex"}
+                self.assertFalse(servers.readiness(provider, True)[0])
+                self.assertTrue(servers.needs_retest(provider))
+
+
 class LocalRules(Base):
     def test_own_server_provider_is_local_first_for_bees_and_has_no_queen(self):
         cfg = {"servers": [self.server()], "providers": [self.entry("remote", "claude"), self.entry("loc", "claude", "lms")]}

@@ -10,6 +10,7 @@ import base64
 import functools
 import errno
 import json
+import hashlib
 import os
 import sqlite3
 import stat
@@ -45,10 +46,11 @@ def _decode(value):
     return None if value is None else base64.b64decode(value)
 
 
-def atomic_write(path, contents):
+def atomic_write(path, contents, *, mode=None):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
+    if mode is None:
+        mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
     fd, temp = tempfile.mkstemp(prefix=path.name + '.', suffix='.tmp', dir=path.parent)
     try:
         with os.fdopen(fd, 'wb') as handle:
@@ -104,9 +106,10 @@ def _acknowledge(ack):
 def _publish(journal, record):
     """Idempotently finish a committed record, checking *all* targets first."""
     ack = record['ack']
-    archived = _disk(ack['target'])
-    if archived is not None and archived != _decode(ack['contents']):
-        raise RecoveryError('Inbox archive changed; journal: %s' % journal)
+    if ack is not None:
+        archived = _disk(ack['target'])
+        if archived is not None and archived != _decode(ack['contents']):
+            raise RecoveryError('Inbox archive changed; journal: %s' % journal)
     for entry in record['files']:
         if _disk(entry['path']) not in (_decode(entry['before']), _decode(entry['after'])):
             raise RecoveryError('Inbox recovery preserves a concurrent edit in %s; journal: %s' % (entry['path'], journal))
@@ -114,14 +117,28 @@ def _publish(journal, record):
         if _disk(entry['path']) != _decode(entry['after']):
             atomic_write(entry['path'], _decode(entry['after']))
     # Archive exactly the bytes consumed, even if a writer replaced the source.
-    atomic_write(ack['target'], _decode(ack['contents']))
-    _acknowledge(ack)
+    if ack is not None:
+        atomic_write(ack['target'], _decode(ack['contents']))
+        _acknowledge(ack)
     journal.unlink()
 
 
 def _recover():
+    _local.recovery_faults = []
     for journal in sorted(_journals().glob('*.json')):
-        record = json.loads(journal.read_text(encoding='utf-8'))
+        try:
+            record = json.loads(journal.read_text(encoding='utf-8'))
+            _validate_record(record, journal)
+        except (ValueError, TypeError, KeyError, OSError) as exc:
+            scope = _read_scope(journal)
+            _local.recovery_faults.append((journal, scope))
+            note = journal.with_suffix('.error.txt')
+            if not note.exists():
+                try:
+                    atomic_write(note, ('Recovery blocked; original journal preserved. Inspect the journal, receipt and target files before restoring it.\n' + str(exc)).encode())
+                except OSError:
+                    pass  # read-only diagnostics must still work when storage is full
+            continue
         # Opening through db.connect would recurse into this recovery operation.
         with closing(sqlite3.connect(Path(record['database']).as_uri() + '?mode=rw', uri=True, timeout=10)) as conn:
             table = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='inbox_receipts'").fetchone()
@@ -130,6 +147,77 @@ def _recover():
             finish((journal, record))
         else:
             journal.unlink()  # no user files were published before commit
+        journal.with_suffix('.scope').unlink(missing_ok=True)
+        journal.with_suffix('.error.txt').unlink(missing_ok=True)
+
+
+def _validate_record(record, journal):
+    sidecar = journal.with_suffix('.scope')
+    if sidecar.exists():
+        scope = json.loads(sidecar.read_text(encoding='utf-8'))
+        if scope['digest'] != hashlib.sha256(json.dumps(record).encode()).hexdigest():
+            raise ValueError('Recovery journal checksum mismatch')
+    if record['id'] != journal.stem or not Path(record['database']).is_absolute() or not isinstance(record['files'], list):
+        raise ValueError('Invalid recovery journal identity or files')
+    for entry in record['files']:
+        if not Path(entry['path']).is_absolute():
+            raise ValueError('Invalid recovery target')
+        for key in ('before', 'after'):
+            if entry[key] is not None:
+                base64.b64decode(entry[key], validate=True)
+    ack = record['ack']
+    if ack is not None:
+        for key in ('source', 'target', 'claim', 'replacement'):
+            if not Path(ack[key]).is_absolute():
+                raise ValueError('Invalid recovery acknowledgement')
+        base64.b64decode(ack['contents'], validate=True)
+
+
+def _read_scope(journal):
+    try:
+        value = json.loads(journal.with_suffix('.scope').read_text(encoding='utf-8'))
+        if not isinstance(value['projects'], dict) or not value['projects'] or not Path(value['database']).is_absolute():
+            return None
+        if any(not isinstance(name, str) or not Path(root).is_absolute() for name, root in value['projects'].items()):
+            return None
+        return value
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def recovery_block_reason(conn, project=None):
+    """Unknown scope blocks starts globally; verified scope blocks its projects."""
+    with locked():
+        database = conn.execute('PRAGMA database_list').fetchone()[2]
+        for journal, scope in getattr(_local, 'recovery_faults', []):
+            if scope is None or (str(Path(database).resolve()) == scope['database'] and
+                                 (project is None or project in scope['projects'])):
+                return 'recovery journal requires inspection: ' + journal.name
+    return ''
+
+
+def _guard_write(path):
+    for journal, scope in getattr(_local, 'recovery_faults', []):
+        if scope is None or any(Path(path).is_relative_to(Path(root)) for root in scope['projects'].values()):
+            raise RecoveryError('Recovery evidence must be resolved before writing: ' + journal.name)
+
+
+def _prepare_scope(conn, record, journal):
+    # A separately durable scope survives damage to the redo payload. Targets
+    # outside project roots affect shared settings and cannot be isolated safely.
+    roots = {name: str(Path(root).resolve()) for name, root in conn.execute('SELECT name, workspace FROM projects') if root}
+    targets = [entry['path'] for entry in record['files']]
+    if record['ack']:
+        targets.append(record['ack']['source'])
+    affected = {}
+    for path in targets:
+        matches = {name: root for name, root in roots.items() if Path(path).is_relative_to(Path(root))}
+        if not matches:
+            affected = {}
+            break
+        affected.update(matches)
+    atomic_write(journal.with_suffix('.scope'), json.dumps({'database': record['database'], 'projects': affected,
+        'digest': hashlib.sha256(json.dumps(record).encode()).hexdigest()}).encode())
 
 
 @contextmanager
@@ -172,6 +260,7 @@ def locked():
                 yield
             finally:
                 _local.depth = 0
+                _local.recovery_faults = []
                 handle.seek(0)
                 if os.name == 'nt':
                     msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
@@ -198,6 +287,7 @@ def read(path):
 
 def write(path, contents):
     path = str(Path(path).resolve())
+    _guard_write(path)
     stage = getattr(_local, 'stage', None)
     if stage is None:
         atomic_write(path, contents)
@@ -211,8 +301,8 @@ class Batch:
         self.before = {}
         self.after = {}
 
-    def prepare(self, conn, source, contents):
-        if _disk(source) != contents:
+    def prepare(self, conn, source=None, contents=None):
+        if source is not None and _disk(source) != contents:
             raise ValueError('inbox file changed while being processed')
         for path, before in self.before.items():
             if _disk(path) != before:
@@ -222,17 +312,21 @@ class Batch:
             raise ValueError('inbox processing requires a persistent database')
         ident = uuid.uuid4().hex
         journal = _journals() / (ident + '.json')
-        target = source.parent / 'done' / (datetime.now().strftime('%Y%m%d-%H%M%S-') + source.name)
-        if target.exists():
-            target = target.with_name(ident + '-' + target.name)
+        ack = None
+        if source is not None:
+            target = source.parent / 'done' / (datetime.now().strftime('%Y%m%d-%H%M%S-') + source.name)
+            if target.exists():
+                target = target.with_name(ident + '-' + target.name)
+            ack = {'source': str(source.absolute()), 'contents': _encode(contents),
+                   'claim': str((source.parent / ('.' + ident + '.ack')).absolute()),
+                   'replacement': str((source.parent / (ident + '-' + source.name)).absolute()),
+                   'target': str(target.resolve())}
         record = {'id': ident, 'database': str(Path(database).resolve()),
                   'files': [{'path': path, 'before': _encode(self.before[path]), 'after': _encode(after)}
                             for path, after in self.after.items()],
-                  'ack': {'source': str(source.absolute()), 'contents': _encode(contents),
-                          'claim': str((source.parent / ('.' + ident + '.ack')).absolute()),
-                          'replacement': str((source.parent / (ident + '-' + source.name)).absolute()),
-                          'target': str(target.resolve())}}
+                  'ack': ack}
         # Durable prepare precedes the receipt; the receipt commits with ALL SQL.
+        _prepare_scope(conn, record, journal)
         atomic_write(journal, json.dumps(record).encode('utf-8'))
         conn.execute('CREATE TABLE IF NOT EXISTS inbox_receipts (id TEXT PRIMARY KEY)')
         conn.execute('INSERT INTO inbox_receipts VALUES (?)', (ident,))
@@ -254,5 +348,26 @@ def staging():
 def finish(prepared):
     try:
         _publish(*prepared)
+        prepared[0].with_suffix('.scope').unlink(missing_ok=True)
+        prepared[0].with_suffix('.error.txt').unlink(missing_ok=True)
     except (OSError, ValueError) as exc:
         raise RecoveryError('Committed inbox operation awaits recovery: %s' % prepared[0]) from exc
+
+
+@contextmanager
+def transaction(conn):
+    """Commit a direct file/database action, or join the enclosing inbox batch."""
+    from . import db
+    with locked():
+        if getattr(_local, 'stage', None) is not None:
+            if not conn.in_transaction:
+                raise RuntimeError('file staging requires a database transaction')
+            yield
+            return
+        if conn.in_transaction:
+            raise RuntimeError('direct file action requires its own database transaction')
+        with staging() as batch:
+            with db.transaction(conn):
+                yield
+                prepared = batch.prepare(conn)
+        finish(prepared)

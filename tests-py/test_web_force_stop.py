@@ -8,11 +8,41 @@ from haivequeen import cli, force_stop, integration, interrupt, loop, orchestrat
 
 
 class ForceStopTests(RoundCase):
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(force_stop.osplat, 'process_identity', return_value='fixture-process')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def agent(self, *args, **kwargs):
+        result = super().agent(*args, **kwargs)
+        runtime.upsert_agent(self.conn, kwargs.get('project', 'testproj'), args[0], {'processIdentity': 'fixture-process'})
+        return result
+
+    def test_cleared_pipeline_state_does_not_break_tray_status(self):
+        from haivequeen import tray
+        runtime.kv_set(self.conn, 'testproj', orchestrator.KEY + REL, '')
+        self.assertFalse(tray.work_running())
+        orchestrator.save(self.conn, 'testproj', REL + '-active', {'job': {'pid': 910006}})
+        self.assertTrue(tray.work_running())
+
+    def test_start_recovery_ignores_cleared_pipeline_state(self):
+        runtime.kv_set(self.conn, 'testproj', orchestrator.KEY + REL, '')
+        loop.stop_flag().parent.mkdir(parents=True, exist_ok=True)
+        loop.stop_flag().write_text('force stop requested before crash\n', encoding='utf-8')
+        args = cli.build_parser().parse_args(['start', '--foreground'])
+        with mock.patch.object(loop, 'loop_running', return_value=0), mock.patch.object(loop, 'run_loop', return_value=0) as run, mock.patch.object(force_stop.osplat, 'kill_process_tree') as kill:
+            self.assertEqual(loop.cmd_start(args, self.conn), 0)
+        run.assert_called_once()
+        kill.assert_not_called()
+        self.assertFalse(loop.stop_flag().exists())
+        self.assertEqual(runtime.kv_get(self.conn, 'testproj', orchestrator.KEY + REL), '')
+
     def test_held_scheduling_lock_does_not_delay_process_termination(self):
         self.plan('RUNNING')
         self.agent('worker', phase='bee', status='running', pid=910002, started=1)
         orchestrator.save(self.conn, 'testproj', REL, {
-            'steps': {'Merge': 'done', 'Build': 'running'}, 'job': {'pid': 910003}})
+            'steps': {'Merge': 'done', 'Build': 'running'}, 'job': {'pid': 910003, 'identity': 'fixture-process'}})
         held = threading.Event()
         release = threading.Event()
         def hold_lock():
@@ -31,7 +61,7 @@ class ForceStopTests(RoundCase):
                 self.assertEqual(set(events[1:]), {('work', 910002), ('work', 910003)})
                 self.agent('late-worker', phase='bee', status='running', pid=910005, started=1)
                 orchestrator.save(self.conn, 'testproj', REL + '-late', {
-                    'steps': {'Deploy': 'running'}, 'job': {'pid': 910006}})
+                    'steps': {'Deploy': 'running'}, 'job': {'pid': 910006, 'identity': 'fixture-process'}})
                 self.agent('reused-worker', phase='bee', status='running', pid=910007, started=1)
                 runtime.kv_set(self.conn, 'testproj', integration.COMPILE_REQUEST_KEY + 'late', json.dumps({
                     'supervisor_pid': 910008, 'supervisor_identity': 'supervisor',
@@ -46,7 +76,7 @@ class ForceStopTests(RoundCase):
             return True
         try:
             self.assertTrue(held.wait(5))
-            with mock.patch.object(loop, 'loop_running', return_value=910004), mock.patch.object(force_stop.agent_process, 'pid_reused', side_effect=lambda row: row.get('pid') == 910007), mock.patch.object(force_stop.osplat, 'process_identity', side_effect=lambda pid: {910008: 'supervisor', 910009: 'new-check'}[pid]), mock.patch.object(loop, 'hive_schedule_lock', side_effect=cleanup_lock):
+            with mock.patch.object(loop, 'loop_running', return_value=910004), mock.patch.object(force_stop.agent_process, 'pid_reused', side_effect=lambda row: row.get('pid') == 910007), mock.patch.object(force_stop.osplat, 'process_identity', side_effect=lambda pid: {910007: 'reused', 910008: 'supervisor', 910009: 'new-check'}.get(pid, 'fixture-process')), mock.patch.object(loop, 'hive_schedule_lock', side_effect=cleanup_lock):
                 result = force_stop.stop(self.conn, kill=kill,
                                          end_loop=lambda pid: events.append(('loop', pid)) or True)
             self.assertTrue(result['ok'], result)
@@ -66,7 +96,7 @@ class ForceStopTests(RoundCase):
     def test_start_recovers_interrupted_force_stop_before_resuming(self):
         self.agent('worker', phase='bee', status='running', pid=910002, started=1)
         orchestrator.save(self.conn, 'testproj', REL, {
-            'steps': {'Merge': 'done', 'Build': 'running'}, 'job': {'pid': 910003}})
+            'steps': {'Merge': 'done', 'Build': 'running'}, 'job': {'pid': 910003, 'identity': 'fixture-process'}})
         loop.stop_flag().parent.mkdir(parents=True, exist_ok=True)
         loop.stop_flag().write_text('force stop requested before crash\n', encoding='utf-8')
         args = cli.build_parser().parse_args(['start', '--foreground'])
@@ -96,7 +126,7 @@ class ForceStopTests(RoundCase):
         acquire = loop.hive_schedule_lock
         def cleanup_lock(*args, **kwargs):
             orchestrator.save(self.conn, 'testproj', REL, {
-                'steps': {'Deploy': 'running'}, 'job': {'pid': 910003}})
+                'steps': {'Deploy': 'running'}, 'job': {'pid': 910003, 'identity': 'fixture-process'}})
             return acquire(*args, **kwargs)
         with mock.patch.object(loop, 'loop_running', return_value=0), mock.patch.object(force_stop.agent_process, 'pid_reused', return_value=False), mock.patch.object(loop, 'hive_schedule_lock', side_effect=cleanup_lock):
             self.assertTrue(force_stop.stop(self.conn, kill=lambda pid: killed.append(pid) or True)['ok'])
@@ -121,7 +151,7 @@ class ForceStopTests(RoundCase):
             self.assertTrue(tray.work_running())
         runtime.upsert_agent(self.conn, 'testproj', 'worker', {'status': 'done', 'pid': None})
         self.assertFalse(tray.work_running())
-        orchestrator.save(self.conn, 'testproj', REL, {'job': {'pid': 910006}})
+        orchestrator.save(self.conn, 'testproj', REL, {'job': {'pid': 910006, 'identity': 'fixture-process'}})
         self.assertTrue(tray.work_running())
         orchestrator.save(self.conn, 'testproj', REL, {})
         runtime.kv_set(self.conn, 'testproj', integration.COMPILE_REQUEST_KEY + 'tray-check', json.dumps({'check_pid': 910007}))
@@ -184,6 +214,7 @@ class ForceStopTests(RoundCase):
                 posix_end.assert_not_called()
 
     def test_new_build_and_deploy_are_visible_to_force_stop_before_next_round(self):
+        self.plan()
         for step in ('Build', 'Deploy'):
             with self.subTest(step=step):
                 finished = threading.Event()
@@ -191,7 +222,7 @@ class ForceStopTests(RoundCase):
                     on_start(910007)
                     finished.wait(5)
                     return 0, ''
-                env = SimpleNamespace(name='testproj', conn=self.conn,
+                env = SimpleNamespace(name='testproj', conn=self.conn, workspace=self.repo,
                                       settings={'buildCommand': 'dummy', 'deployCommand': 'dummy'})
                 state = {'steps': {}}
                 try:
@@ -199,6 +230,7 @@ class ForceStopTests(RoundCase):
                         orchestrator._command(self.conn, env, REL, state, self.wt, step, 8192)
                         stored = orchestrator.load(self.conn, 'testproj', REL)
                         self.assertEqual(stored['job']['pid'], 910007)
+                        self.assertEqual(stored['job']['identity'], 'fixture-process')
                         killed = []
                         with mock.patch.object(loop, 'loop_running', return_value=0):
                             self.assertTrue(force_stop.stop(self.conn, kill=lambda pid: killed.append(pid) or True)['ok'])
@@ -213,6 +245,7 @@ class ForceStopTests(RoundCase):
         self.plan('READY', [{'id': 'P1', 'title': 'First'}])
         self.round()
         first = next(a for a in runtime.list_agents(self.conn, 'testproj', 'active') if a['phase'] == 'queen' and a['status'] == 'running')
+        runtime.upsert_agent(self.conn, 'testproj', first['name'], {'processIdentity': 'fixture-process'})
         with mock.patch.object(loop, 'loop_running', return_value=0):
             self.assertTrue(force_stop.stop(self.conn, kill=lambda pid: True)['ok'])
         self.round()
@@ -231,7 +264,7 @@ class ForceStopTests(RoundCase):
         self.agent('queen', phase='queen', status='running', pid=910001, started=1)
         self.agent('worker', phase='bee', status='running', pid=910002, started=1)
         before = self.conn.execute('SELECT status FROM plans').fetchone()[0]
-        orchestrator.save(self.conn, 'testproj', REL, {'steps': {'Merge': 'done', 'Build': 'running'}, 'job': {'pid': 910003}, 'phase': 'pipeline', 'placed': True})
+        orchestrator.save(self.conn, 'testproj', REL, {'steps': {'Merge': 'done', 'Build': 'running'}, 'job': {'pid': 910003, 'identity': 'fixture-process'}, 'phase': 'pipeline', 'placed': True})
         killed = []
         ended = []
         with mock.patch.object(loop, 'loop_running', return_value=910004), mock.patch('haivequeen.agent_process.pid_reused', return_value=False):

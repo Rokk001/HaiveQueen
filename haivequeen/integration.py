@@ -12,9 +12,9 @@ from pathlib import Path
 import time
 from datetime import datetime
 
-from . import db, localtime, plans, platform as osplat, proctree, runtime
+from . import agent_process, db, localtime, plans, platform as osplat, proctree, runtime
 
-COMPILE_MILESTONE = re.compile(r"^(\w+)\t\S+ Compile test\b")   # the live line of a compile check in milestones.txt (the dashboard shows it)
+COMPILE_MILESTONE = re.compile(r"^(\w+)\t[^\r\n]+ Compile test\b")   # the live line of a compile check in milestones.txt (the dashboard shows it)
 COMPILE_KEY = "compile-check:"   # + Queen name: the stored result of `bzz compile-check` for that Queen run
 POLL_SECONDS = 1.0   # how often a compile check looks at its process and at the lock of the machine
 COMPILE_AGENT_KEY = "compile-agent:"   # + name or worktree: the stored result of an Agent; it never counts for `bzz ready`
@@ -200,7 +200,16 @@ def _acquire_compile_slot(settings, poll, builds=None, owner=None):
     while True:
         with _compile_lock_guard(path, poll):
             holders = _live_holders(path)
-            if _slot_wait(settings, holders, builds) is None:
+            from . import check_events, config
+            database = owner.get('database') if owner else str(config.db_path())
+            diagnostic_wait = ''
+            if database and Path(database).is_file():
+                check_conn = db.connect(database)
+                try:
+                    diagnostic_wait = check_events.resource_wait(check_conn, settings.get('integrationStepResources', {}).get('Check'))
+                finally:
+                    check_conn.close()
+            if not diagnostic_wait and _slot_wait(settings, holders, builds) is None:
                 token = uuid.uuid4().hex
                 path.write_text(json.dumps({"holders": holders + [{**(owner or {}), "token": token, "pid": os.getpid()}]}), encoding="utf-8")
                 return token
@@ -221,10 +230,14 @@ def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, lab
     """Run `command` in `cwd` until it ends; returns (exit code, output text). The check ends red (124) after max_seconds of running and red (125,
     "stalled") when for stall_seconds neither a new output line appeared nor the CPU time of its process tree grew. `env` adds environment variables,
     `label` names the command in the messages and `on_start(pid)` is called once the process runs (the Orchestrator keeps it to end the command)."""
-    import tempfile
-    with tempfile.TemporaryDirectory(prefix="compile-completion-") as folder:
-        return _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll,
-                                  Path(folder) / "exit", env, label, on_start, log_file)
+    import uuid
+    # The launcher can outlive this observer (including its exception paths).
+    # Keep its exit receipt with the durable action, never in auto-cleaned temp.
+    completion = (Path(log_file).with_suffix('.exit') if log_file else
+                  osplat.data_dir() / 'command-completions' / (uuid.uuid4().hex + '.exit'))
+    completion.parent.mkdir(parents=True, exist_ok=True)
+    return _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll,
+                              completion, env, label, on_start, log_file)
 
 
 def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completion, env, label, on_start, log_file=None):
@@ -236,27 +249,39 @@ def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completio
     state = {"lines": 0}
 
     def read(stream):
-        for line in iter(stream.readline, ""):
-            action_logs.append(log_file, line)
-            lines.append(line.rstrip("\r\n"))
-            state["lines"] += 1
+        try:
+            for line in iter(stream.readline, ""):
+                action_logs.append(log_file, line)
+                lines.append(line.rstrip("\r\n"))
+                state["lines"] += 1
+        finally:
+            stream.close()
 
     # The configured command line is the owner's own text, so the system shell runs it (named explicitly, no shell flag): cmd /s keeps a quoted program path intact.
     line = 'cmd.exe /d /s /c "%s"' % command if os.name == "nt" else ["/bin/sh", "-c", command]
-    launcher = ("import json, pathlib, subprocess, sys; "
+    launcher = ("import json, os, pathlib, subprocess, sys; "
                 "code = subprocess.call(json.loads(sys.argv[1])); "
-                "pathlib.Path(sys.argv[2]).write_text(str(code), encoding='ascii')")
+                "target = pathlib.Path(sys.argv[2]); "
+                "target.parent.mkdir(parents=True, exist_ok=True); "
+                "pending = target.with_suffix('.pending'); "
+                "handle = pending.open('w', encoding='ascii'); "
+                "handle.write(str(code)); handle.flush(); os.fsync(handle.fileno()); handle.close(); "
+                "os.replace(pending, target)")
     proc = subprocess.Popen([sys.executable, "-I", "-c", launcher, json.dumps(line), str(completion)],
                             cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                             env={**os.environ, **env} if env else None, **({"start_new_session": True} if os.name != "nt" else {}))
-    if on_start:
-        on_start(proc.pid)
     proctree.exempt_register(proc.pid)   # started by HaiveQueen, not by the agent: the cleanup of the agent's leftover processes leaves it alone
     reader = threading.Thread(target=read, args=(proc.stdout,), daemon=True)
     reader.start()
     started = last_progress = time.monotonic()
     seen_lines, seen_cpu, ended = 0, -1.0, None
     try:
+        if log_file:
+            action_logs._write(log_file, {'event': 'launcher', 'time': action_logs._now(),
+                                          'pid': proc.pid, 'identity': osplat.process_identity(proc.pid),
+                                          'completion': str(completion), 'run_id': completion.stem})
+        if on_start:
+            on_start(proc.pid)
         while proc.poll() is None:
             now = time.monotonic()
             cpu = proctree.tree_cpu_seconds(proc.pid)
@@ -273,10 +298,23 @@ def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completio
         try:
             proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
-            pass
+            action_logs.append(log_file, '\nInfrastructure error: launcher still alive after termination request; completion receipt retained.\n')
+            raise RuntimeError('launcher still alive after termination request')
         reader.join(timeout=5)
+    except BaseException:
+        def reap_detached():
+            proc.wait()
+            reader.join()
+            proctree.exempt_clear(proc.pid)
+        threading.Thread(target=reap_detached, daemon=True).start()
+        if log_file:
+            action_logs._write(log_file, {'event': 'observer_detached', 'time': action_logs._now(),
+                                          'pid': proc.pid, 'completion': str(completion),
+                                          'running': proc.poll() is None})
+        raise
     finally:
-        proctree.exempt_clear(proc.pid)
+        if proc.poll() is not None:
+            proctree.exempt_clear(proc.pid)
     text = action_logs.output(log_file) if log_file else "\n".join(lines)
     if ended:
         if log_file:
@@ -288,7 +326,7 @@ def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completio
     except (OSError, ValueError):
         code = None
     if proc.returncode != 0 or code is None:
-        message = "the command launcher ended without completing the run"
+        message = "Infrastructure error: the command launcher ended without completing the run (launcher exit %s; receipt %s)" % (proc.returncode, completion)
         action_logs.append(log_file, "\n" + message + "\n")
         return -1, text + ("\n" if text else "") + message
     return code, text
@@ -296,7 +334,7 @@ def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completio
 
 # Run the compile check of the project for a Queen or an Agent.
 def _execute_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True, store=True, owner=None,
-                           acquired_slot=None, on_start=None, log_file=None):
+                           acquired_slot=None, on_start=None, log_file=None, check_environment=None):
     """Run the setting compileCheck in the worktree `cwd` (default: that of `queen`, the row of the caller), store {ok, exit, commit, time, seconds, command} under
     `key` (default: the result of the Queen's run that `bzz ready` reads), add the live line to the milestones of the caller and return the result with the end of the
     output under "output". At most the setting maxConcurrentCompileChecks checks run at the same time per machine, and only while RAM and cores are free: waiting counts for neither limit. The settings compileStallMinutes (10) and
@@ -315,6 +353,8 @@ def _execute_compile_check(env, queen, cwd=None, key=None, poll=None, milestones
             options = {"on_start": on_start} if on_start else {}
             if log_file:
                 options["log_file"] = log_file
+            if check_environment:
+                options['env'] = check_environment
             code, output = _watch_compile(command, cwd, stall, longest, poll, **options)
         except OSError as exc:
             code, output = 127, "the compile check could not start: %s" % exc
@@ -355,7 +395,7 @@ def _database_path(conn):
     return str(conn.execute("PRAGMA database_list").fetchone()[2]) if conn is not None else str(config.db_path())
 
 
-def start_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True, log_file=None):
+def start_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=True, log_file=None, check_environment=None):
     """Start an independent supervisor and return its durable result address and PID."""
     import uuid
     token = uuid.uuid4().hex
@@ -367,6 +407,7 @@ def start_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=Tr
                    "poll": POLL_SECONDS if poll is None else poll,
                    "milestones": str(env.run_dir(queen["name"])) if milestones else ""}
         request["log_file"] = log_file
+        request['check_environment'] = check_environment
         request["commit"] = head_commit(request["cwd"])
         runtime.kv_set(conn, env.name, COMPILE_REQUEST_KEY + token, json.dumps(request))
     finally:
@@ -390,7 +431,7 @@ def start_compile_check(env, queen, cwd=None, key=None, poll=None, milestones=Tr
         return {"token": token, "pid": 0, "database": database}
     proctree.exempt_register(proc.pid)
     SUPERVISORS[token] = proc
-    return {"token": token, "pid": proc.pid, "database": database}
+    return {"token": token, "pid": proc.pid, "identity": osplat.process_identity(proc.pid), "database": database}
 
 
 def compile_supervisor(database, project, token):
@@ -423,7 +464,8 @@ def compile_supervisor(database, project, token):
                 else:
                     result = _execute_compile_check(env, {"name": request["name"]}, cwd=request["cwd"],
                                                     key=COMPILE_RUN_KEY + token, poll=request["poll"], milestones=bool(request["milestones"]), store=False,
-                                                    acquired_slot=slot, on_start=started, log_file=request.get("log_file"))
+                                                    acquired_slot=slot, on_start=started, log_file=request.get("log_file"),
+                                                    check_environment=request.get('check_environment'))
         except Exception as exc:
             if not _end_orphan(request):
                 return   # leave the holder discoverable until recovery can end the command
@@ -484,7 +526,7 @@ def poll_compile_check(conn, project, job, clean_slot=True):
     raw = runtime.kv_get(conn, project, COMPILE_RUN_KEY + token)
     if raw:
         return json.loads(raw)
-    if osplat.process_alive(job["pid"]):
+    if agent_process.recorded_alive(job["pid"], job.get("identity")):
         return None
     # Serialize recovery and check again: the supervisor may have published just before exit.
     with db.transaction(conn):

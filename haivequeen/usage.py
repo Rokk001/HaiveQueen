@@ -171,7 +171,7 @@ def claude_refresh_error(conn, project=GLOBAL_PROJECT, provider=None) -> str:
     return str(_claude_snapshot(conn, project, provider).get('refresh_error') or '')
 
 
-RETAIN_HOURS = 6   # a verified Claude reading younger than this still counts for starts and ranking while the newest check failed
+RETAIN_HOURS = 6   # historical display retention; never authorizes starts after a failed refresh
 
 
 # The last verified Claude reading while a failed check must not block every start.
@@ -221,6 +221,43 @@ def retained_five_hour(conn, project=GLOBAL_PROJECT, provider=None):
 CLAUDE_USAGE_TIMEOUT = 60   # seconds the claude -p /usage call may take (start-up alone needs far more than 20 s while many Claude processes run)
 USAGE_INTERVAL = 60              # seconds between usage checks of a model provider
 USAGE_UNREACHABLE_INTERVAL = 600   # seconds between usage checks of a provider whose last check failed (not reachable)
+
+
+def quota_block_reason(conn, provider, now=None):
+    """Explain the same cached observation gate used to authorize starts."""
+    if conn is None:
+        return 'quota unknown: no observation database'
+    source = provider.get('limit')
+    key = _claude_key(provider) if source == 'claude' else CODEX_USAGE_KEY + ':' + str(provider['name'])
+    now = time.time() if now is None else now
+    try:
+        snapshot = json.loads(runtime.kv_get(conn, GLOBAL_PROJECT, key) or '{}')
+        if not isinstance(snapshot, dict):
+            return 'quota unknown: invalid observation'
+        if snapshot.get('refresh_error'):
+            return 'quota unknown: last refresh failed'
+        if not snapshot.get('saved'):
+            return 'quota unknown: no successful observation'
+        saved = datetime.fromisoformat(snapshot['saved'])
+        if saved.tzinfo is None:
+            saved = saved.astimezone()
+        age = now - saved.timestamp()
+        if age < 0:
+            return 'quota unknown: observation timestamp is in the future'
+        if age >= USAGE_INTERVAL:
+            return 'quota stale: observation %.1f s old, freshness limit %s s' % (age, USAGE_INTERVAL)
+        windows = [_claude_window(snapshot[key], True, int(now))
+                   for key in ('fiveHour', 'sevenDay') if snapshot.get(key)]
+        if not windows or not all(window and window.get('pct') is not None for window in windows):
+            return 'quota unknown: no valid usage window'
+        return ''
+    except (ValueError, TypeError, AttributeError, KeyError, OverflowError):
+        return 'quota unknown: invalid observation'
+
+
+def quota_verified(conn, provider, now=None):
+    """Historical readings remain visible but cannot authorize a new start."""
+    return not quota_block_reason(conn, provider, now)
 
 
 # Choose how often the usage status of a model provider is asked for.
@@ -505,7 +542,8 @@ _dashboard_refresh_at = 0.0
 def schedule_dashboard_refresh(conn, providers):
     """Refresh cached metadata off the dashboard request thread, including while the loop is stopped."""
     global _dashboard_refresh_at
-    if os.environ.get('BZZ_DATA_DIR') or os.environ.get('BZZ_RUNTIME_OVERRIDE') or os.environ.get('BZZ_PROVIDER_LIMITS_FILE'):
+    if (os.environ.get('BZZ_NO_DASHBOARD_QUOTA_REFRESH') or os.environ.get('BZZ_DATA_DIR')
+            or os.environ.get('BZZ_RUNTIME_OVERRIDE') or os.environ.get('BZZ_PROVIDER_LIMITS_FILE')):
         return
     if time.monotonic() - _dashboard_refresh_at < 60 or not _dashboard_refresh_lock.acquire(blocking=False):
         return

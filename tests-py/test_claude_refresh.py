@@ -312,7 +312,7 @@ class ClaudeRefreshTests(RoundCase):
             self.assertAlmostEqual(row['stale_hours'], 2, delta=0.1)
             shown = dashboard_data.limit_rows({'provider_limits': [row]})[0]
             self.assertEqual(shown['weekly']['pct'], 90)
-            self.assertEqual(shown['reserve']['age'], '2h')
+            self.assertEqual(shown['reserve']['age'], 'Last reading: 2h')
             old = (datetime.now(timezone.utc) - timedelta(hours=usage.RETAIN_HOURS + 1)).isoformat()
             runtime.kv_set(self.conn, '*', 'usage-claude:claude', json.dumps({'saved': old, 'refresh_error': 'x',
                 'sevenDay': {'utilization': 0.9, 'resetsAt': int(self.reset.timestamp())}}))
@@ -341,12 +341,13 @@ class ClaudeReadingDisplayTests(ClaudeRefreshTests):
         with mock.patch.dict(os.environ, env, clear=True):
             return overview.provider_lines(self.conn, {'providers': self.providers()}, [])[0]
 
-    def test_retained_five_hour_window_stays_in_panel(self):
+    def test_retained_five_hour_window_stays_visible_but_cannot_authorize_starts(self):
+        """Historical usage remains informative; failed refreshes block new work."""
         self.store(2)
         shown = dashboard_data.limit_rows({'provider_limits': [self.row()]})[0]
         self.assertEqual(shown['five'][:5], '5h 40')
-        self.assertNotEqual(shown['reserve']['level'], 'bad')
-        self.assertFalse(shown['slots']['blocked'])
+        self.assertEqual(shown['reserve']['level'], 'bad')
+        self.assertTrue(shown['slots']['blocked'])
 
     def test_expired_reading_shows_red_unknown_grey_slots_and_blocks_work(self):
         from haivequeen import scheduler

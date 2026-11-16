@@ -443,6 +443,9 @@ def _workspace(conn, project, override=None) -> Path:
 @filetxn.coordinated
 def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
     """Read the plan files of a project into plans/packages and return the plans and the startable packages (rule 11)."""
+    blocked = filetxn.recovery_block_reason(conn, project)
+    if blocked:
+        return {'plans': list_plans(conn, project), 'startable': [], 'blocked': blocked}
     ws = _workspace(conn, project, workspace)
     pcfg = config.load_project(ws)
     found = plan_mod.discover_plans(str(ws), pcfg["planGlobs"], pcfg["planExclude"])
@@ -495,8 +498,16 @@ def sync_plans(conn, project, workspace=None, extra_done=()) -> dict:
 def list_plans(conn, project=None) -> list:
     """List plans, optionally for one project."""
     if project:
-        return db.rows(conn, "SELECT * FROM plans WHERE project=? ORDER BY path", (project,))
-    return db.rows(conn, "SELECT * FROM plans ORDER BY project, path")
+        rows = db.rows(conn, "SELECT * FROM plans WHERE project=? ORDER BY path", (project,))
+    else:
+        rows = db.rows(conn, "SELECT * FROM plans ORDER BY project, path")
+    return [dict(row, missing=plan_missing(conn, row['project'], row['path'])) for row in rows]
+
+
+def plan_missing(conn, project, plan):
+    """File availability is separate from lifecycle state and retained results."""
+    row = conn.execute('SELECT workspace FROM projects WHERE name=?', (project,)).fetchone()
+    return bool(row and row[0] and not (Path(row[0]) / plan).is_file())
 
 
 def list_packages(conn, project=None, plan=None) -> list:
@@ -564,7 +575,9 @@ def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
     path = _workspace(conn, project, workspace) / plan
     if not path.is_file():
         raise CmdError(f"plan file not found: {plan}")
-    text = filetxn.read(path).decode("utf-8").replace("\r\n", "\n")
+    raw = filetxn.read(path)
+    encoding = "utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8"
+    text = raw.decode(encoding)
     nl = "\r\n" if "\r\n" in text else "\n"
     lines = text.split(nl)
     changed = False
@@ -581,10 +594,11 @@ def set_plan_status(conn, project, plan, status, workspace=None) -> dict:
         changed = True
     if not changed:
         raise CmdError(f"no status line found in {plan}")
-    filetxn.write(path, nl.join(lines).encode("utf-8"))
+    filetxn.write(path, nl.join(lines).encode(encoding))
     with db.transaction(conn):
         conn.execute("UPDATE plans SET status=?, updated_at=? WHERE project=? AND path=?",
                      (status, db.now(), project, plan))
+        kv_delete(conn, project, 'global-plan-stop:' + plan)
     if status == "SENT":
         record_submission(conn, project, plan, nl.join(lines))
     if status in ENDED_WAIT_STATUSES:
@@ -598,8 +612,11 @@ def set_plan_header(conn, project, plan, branch, worktree, workspace=None) -> di
     path = _workspace(conn, project, workspace) / plan
     if not path.is_file():
         raise CmdError(f"plan file not found: {plan}")
-    text = filetxn.read(path).decode("utf-8").replace("\r\n", "\n")
-    lines = text.split("\n")
+    raw = filetxn.read(path)
+    encoding = "utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8"
+    text = raw.decode(encoding)
+    nl = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(nl)
     end = next((i for i in range(1, len(lines)) if lines[i].strip() == "+++"), None) if lines and lines[0].strip() == "+++" else None
     if end is None:
         raise CmdError(f"no plan header found in {plan}")
@@ -614,7 +631,7 @@ def set_plan_header(conn, project, plan, branch, worktree, workspace=None) -> di
             at = next((i + 1 for i, line in enumerate(header[:first_table]) if re.match(r"^\s*status\s*=", line)), 0)
             header.insert(at, row)
             first_table += 1
-    filetxn.write(path, "\n".join(lines[:1] + header + lines[end:]).encode("utf-8"))
+    filetxn.write(path, nl.join(lines[:1] + header + lines[end:]).encode(encoding))
     return {"plan": plan, "branch": branch, "worktree": str(worktree)}
 
 

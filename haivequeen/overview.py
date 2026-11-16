@@ -286,10 +286,15 @@ def collect(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
 # Build weekly provider usage and slot rows and mark the next medium provider.
 def provider_lines(conn, cfg, agents) -> list:
     """Build the provider weekly quota and slot rows, marking the scheduler's next medium provider."""
-    providers = offline.apply_state([p for p in sch.get_providers(cfg or {}) if p["enabled"]], conn)   # a disabled provider appears nowhere
+    providers = offline.apply_state([p for p in sch.get_providers(cfg or {}) if p["enabled"]], conn)
     free = sch.provider_free(providers, agents, conn)
     embedded = sch.embedded_slots(conn)
     next_provider = sch.select_provider(providers, "medium", [], free, conn=conn)
+    # Disabling new work must not hide capacity still occupied by existing agents.
+    occupied = {sch.row_provider(a) for a in agents if a.get('status') in sch.ACTIVE}
+    occupied.update(name for name, count in embedded.items() if count)
+    providers += offline.apply_state([p for p in sch.get_providers(cfg or {})
+                                      if not p['enabled'] and p['name'] in occupied], conn)
     rows = []
     for provider in providers:
         source = provider["limit"]

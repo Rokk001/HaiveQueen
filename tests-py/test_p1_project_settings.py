@@ -121,7 +121,7 @@ class DerivedValuesTest(Dirs):
         merged = scheduler.build_settings({"owner": "Alex", "queenClass": "light", "beesPerQueen": 2, "roundMinutes": 7, "escalateAfter": 4}, project)
         for key, value in {"owner": "Alex", "queenClass": "light", "beesPerQueen": 2, "roundMinutes": 7, "escalateAfter": 4, "contextLimitTokens": 300000}.items():
             self.assertEqual(merged[key], value, key)
-        for key in ("capabilityRules", "preferredProvider", "ownerCheckText", "allowedTools", "ignoredBuildOutput", "protectedWorktrees", "compileCheckEnabled", "claudeTools", "language"):
+        for key in ("capabilityRules", "preferredProvider", "ownerCheckText", "allowedTools", "protectedWorktrees", "compileCheckEnabled", "claudeTools", "language"):
             self.assertNotIn(key, merged)
 
     def test_context_limit_per_provider_and_model_entry_wins(self):
@@ -308,12 +308,18 @@ class MigrationTest(Dirs):
         self.assertEqual(len(done), 2)
         self.assertEqual((self.example / ".haivequeen" / "project.toml.bak").read_text(encoding="utf-8"), old_example)
         new = self.project_toml(self.example)
-        self.assertEqual(set(new), {"name", "colour", "priority", "codeRepo", "integrationBranch", "worktreePrefix", "plans", "compileCheck", "buildProcessNames", "onEvent"})
+        self.assertEqual(set(new), {"ignoredBuildOutput", "name", "colour", "priority", "codeRepo", "integrationBranch", "worktreePrefix", "plans",
+                                    "compileCheck", "buildProcessNames", "onEvent", "wayOfWorking", "mergeMode", "checkMode",
+                                    "buildMode", "deployMode", "releaseMode", "checkEnabled", "buildEnabled", "deployEnabled",
+                                    "releaseEnabled", "releaseFolder", "releasePostfix"})
+        self.assertEqual(new["wayOfWorking"], "local")
+        self.assertTrue(new["checkEnabled"])
+        self.assertFalse(new["releaseEnabled"])
         self.assertEqual(new["codeRepo"], str(self.example_repo))
         self.assertEqual(new["plans"], ["docs/**/*-PLAN.md", "docs/**/FEATURE-QS-[0-9].md", "!docs/orchestrator/**"])
         self.assertEqual(new["onEvent"]["timeoutSeconds"], 180)
         text = self.md(self.example)
-        for key in ("owner", "language" if False else "roundMinutes", "escalateAfter", "ignoredBuildOutput", "protectedWorktrees", "claudeTools", "allowedTools", "views", "integrationStateFile",
+        for key in ("owner", "language" if False else "roundMinutes", "escalateAfter", "protectedWorktrees", "claudeTools", "allowedTools", "views", "integrationStateFile",
                     "minClass", "bundle", "openMarker", "integratorSlots", "paneCloseDelaySeconds", "terminalProfile", "ruleSources", "phaseRules", "planStandaloneRegex",
                     "planSuffixRegex", "somethingNew", "planGlobs", "planExclude", "repo", "buildFlowDoc", "integratorInstructions"):
             self.assertIn("`%s`" % key, text, key)
@@ -324,15 +330,16 @@ class MigrationTest(Dirs):
     def test_hq_file_switch_off_integrator_prompt_and_remote(self):
         projsettings.migrate_all()
         new = self.project_toml(self.hq)
-        self.assertEqual(new["compileCheck"], "")
+        self.assertEqual(new["compileCheck"], "python -m unittest")
+        self.assertFalse(new["checkEnabled"])
         self.assertNotIn("compileCheckEnabled", new)
         self.assertNotIn("remoteName", new)
         self.assertNotIn("prompts", new)
         text = self.md(self.hq)
-        self.assertIn("python -m unittest", text)
+        self.assertIn("`compileCheckEnabled` = False", text)
         self.assertIn("prompts.integrator", text)
-        self.assertNotIn("buildEnabled", new)
-        self.assertNotIn("deployEnabled", new)
+        self.assertFalse(new["buildEnabled"])
+        self.assertFalse(new["deployEnabled"])
         self.assertIn("`buildEnabled` = False", text)
         self.assertIn("`deployEnabled` = False", text)
 
@@ -385,7 +392,8 @@ class MigrationTest(Dirs):
         ws = self.workspace("nameless", 'colour = "red"\nweird = 5\nworktreePrefix = "NL"\nupstreamRepo = "C:/up"\n')
         projsettings.migrate_all([ws])
         new = self.project_toml(ws)
-        self.assertEqual(new, {"name": "nameless", "colour": "red", "worktreePrefix": "NL", "upstreamRepo": "C:/up"})
+        self.assertEqual(new, projsettings.working_settings(
+            {"name": "nameless", "colour": "red", "worktreePrefix": "NL", "upstreamRepo": "C:/up"}))
         self.assertIn("`weird` = 5 - not used", self.md(ws))
 
     def test_migrated_copies_work_as_before(self):
@@ -405,7 +413,9 @@ class MigrationTest(Dirs):
         example = config.load_project(self.example)
         self.assertEqual(example["planGlobs"], ["docs/**/*-PLAN.md", "docs/**/FEATURE-QS-[0-9].md"])
         self.assertEqual(example["planExclude"], ["docs/orchestrator/**"])
-        self.assertEqual(scheduler.build_settings(cfg, config.load_project(self.hq), workspace=self.hq)["compileCheck"], "")
+        hq_settings = scheduler.build_settings(cfg, config.load_project(self.hq), workspace=self.hq)
+        self.assertEqual(hq_settings["compileCheck"], "python -m unittest")
+        self.assertFalse(hq_settings["checkEnabled"])
         claude = scheduler.get_providers(cfg)[0]
         self.assertIn("Agent", agent_runner.claude_tools(claude).split(","))
 
@@ -487,9 +497,12 @@ class LeftoverProcessTest(Dirs):
             osplat.kill_process_tree(pid)
 
     def test_cleanup_ends_children_before_supervisors_regardless_of_pid(self):
-        procs = {900: {"ppid": 1}, 100: {"ppid": 900}, 50: {"ppid": 100}}
+        procs = {900: {"ppid": 1, "identity": "birth900"},
+                 100: {"ppid": 900, "identity": "birth100"},
+                 50: {"ppid": 100, "identity": "birth50"}}
         with (mock.patch.object(proctree, "is_exempt", return_value=False),
               mock.patch.object(osplat, "process_alive", return_value=True),
+              mock.patch.object(osplat, "process_identity", side_effect=lambda pid: "birth%d" % pid),
               mock.patch.object(proctree, "_terminate") as terminate):
             self.assertEqual(proctree.kill_recorded(procs), [50, 100, 900])
         self.assertEqual([call.args[0] for call in terminate.call_args_list], [50, 100, 900])

@@ -4,17 +4,24 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import action_logs, orchestrator, runtime, plans
+from . import action_logs, orchestrator, runtime, plans, config
 
 
-def read(conn, project, plan, step):
+def timing_threshold():
+    """Use the owner's setting without changing any test execution."""
+    import math
+    value = config.load_config().get('slowTestSeconds', 10)
+    return value if type(value) in (int, float) and math.isfinite(value) and value > 0 else 10
+
+
+def read(conn, project, plan, step, *, page_request=None):
     state = orchestrator.load(conn, project, plan) or {}
     status = (state.get('steps') or {}).get(step, 'todo')
     current = state.get('step') == step
     job = state.get('job') or {}
     blocker = runtime.kv_get(conn, project, 'hive-blocker:' + plan) or ''
     waiting = current and state.get('phase') == 'pipeline' and bool(blocker) and not job
-    journal = action_logs.latest(project, plan, step)
+    journal = action_logs.latest(project, plan, step, metadata_only=page_request is not None)
     historical = False
     reason = ''
     if journal:
@@ -45,24 +52,38 @@ def read(conn, project, plan, step):
     if waiting:
         status, reason = 'waiting', blocker
     fix = state.get('fix') or {}
+    diagnosis = current and state.get('phase') == 'diagnosing'
+    error = fix.get('error', '') if fix.get('step') == step else ''
+    if diagnosis:
+        status, reason = 'red', blocker
+        error = orchestrator._check_failure_text(job.get('checks', {'failures': {}}))
+    summary = {'slow_test_seconds': timing_threshold(), 'step': step, 'status': status, 'phase': state.get('phase', ''),
+               'exit_code': record.get('exit_code'),
+               'error': error,
+               'reason': reason, 'historical': historical,
+               'started_at': record.get('started_at'), 'ended_at': record.get('ended_at')}
+    if journal:
+        from . import test_timings
+        try:
+            summary['test_timings'] = test_timings.summary(journal['path'], summary['slow_test_seconds'])
+        except (OSError, ValueError):
+            summary['test_timings'] = {'unavailable': True}
+    if page_request is not None:
+        from . import web_log_pages
+        return web_log_pages.response(conn, project, plan, step, record, journal, summary, page_request)
     console = record.get('output', '')
-    references = referenced_logs(conn, project, plan, console + '\n' + reason)
+    references = referenced_logs(conn, project, plan, console + '\n' + reason, journal=journal['path'] if journal else None)
     output = console
     for item in references:
         output += '\n\n--- ' + item['path'] + ' ---\n' + (item.get('content') or item.get('error', ''))
-    return {'console_output':console, 'references':references, 'step':step, 'status':status, 'phase':state.get('phase', ''),
+    return {'slow_test_seconds': summary['slow_test_seconds'], 'console_output':console, 'references':references, 'step':step, 'status':status, 'phase':state.get('phase', ''),
             'exit_code':record.get('exit_code'), 'output':output,
-            'error':fix.get('error', '') if fix.get('step') == step else '',
+            'error':error,
             'reason':reason, 'historical':historical,
             'started_at':record.get('started_at'), 'ended_at':record.get('ended_at')}
 
 
-def referenced_logs(conn, project, plan, text):
-    """Read only explicitly named log files inside this plan's worktree."""
-    names = list(dict.fromkeys(match.group(1).replace('\\', '/')
-        for match in re.finditer(r"(?i)\b(?:see|log)\s+[\"']?(out[\\/][^\r\n\"']*?\.(?:txt|log))(?=[\s\"']|$)", text)))
-    if not names:
-        return []
+def reference_root(conn, project, plan):
     row = conn.execute('SELECT workspace FROM projects WHERE name=?', (project,)).fetchone()
     root = None
     try:
@@ -74,18 +95,42 @@ def referenced_logs(conn, project, plan, text):
                 root = Path(named).resolve()
     except (OSError, ValueError, TypeError):
         pass
+    return root
+
+
+def reference_path(conn, project, plan, name, journal=None):
+    from . import log_snapshots
+    archived = log_snapshots.resolve(journal, name)
+    if archived is not None:
+        return archived, True
+    root = reference_root(conn, project, plan)
+    if root is None:
+        raise ValueError('Plan worktree unavailable')
+    path = (root / name).resolve()
+    if not path.is_relative_to(root / 'out') or '..' in Path(name).parts:
+        raise ValueError('Path outside plan output folder')
+    return path, False
+
+
+def referenced_logs(conn, project, plan, text, *, content=True, journal=None):
+    """Read only explicitly named log files inside this plan's worktree."""
+    names = list(dict.fromkeys(match.group(1).replace('\\', '/')
+        for match in re.finditer(r"(?i)\b(?:see|log)\s+[\"']?(out[\\/][^\r\n\"']*?\.(?:txt|log))(?=[\s\"']|$)", text)))
+    if not names:
+        return []
+    if not content:
+        names = [name for name in names if len(name) <= 1024][:16]
     result = []
     for name in names:
         item = {'path':name}
         try:
-            if root is None:
-                raise ValueError('Plan worktree unavailable')
-            path = (root / name).resolve()
-            if not path.is_relative_to(root / 'out') or '..' in Path(name).parts:
-                raise ValueError('Path outside plan output folder')
+            path, item['archived'] = reference_path(conn, project, plan, name, journal)
             stat = path.stat()
             item['modified_at'] = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
             item['size'] = stat.st_size
+            if not content:
+                result.append(item)
+                continue
             # Bound each response; the original file remains untouched.
             with path.open('rb') as stream:
                 raw = stream.read(8 * 1024 * 1024)

@@ -37,11 +37,16 @@ def capable_providers(providers, need) -> list:
     return [p for p in providers if ('Confidential data' not in [scheduler.canonical_capability(n) for n in need] or scheduler._local_confidential(p)) and all(scheduler.canonical_capability(n) in [scheduler.canonical_capability(c) for c in p.get('capabilities', [])] for n in need)]
 
 
-def select_route(providers, free, hive_provider, package_class, capability, excluded, escalated, limited=(), conn=None):
+def select_route(providers, free, hive_provider, package_class, capability, excluded, escalated, limited=(), conn=None, rejected=None):
     """Pick a permitted Agent provider and class, returning None when it must wait.
 
     when the permitted providers of the class (a free local provider, the Queen's own one) have no free slot, the Agent goes to another
     provider by the normal provider choice (class, capabilities, quota reserve, free slot); with no free slot anywhere it waits."""
+    if rejected is not None:
+        for p in providers:
+            reason = ('excluded by settings' if p['name'] in excluded else
+                      scheduler.provider_block_reason(p, package_class, capability, free, conn))
+            rejected[p['name']] = reason or 'not selected by routing constraints'
     providers = [p for p in providers if p['name'] not in excluded and not p.get('unavailable')]   # a disabled or offline provider gets no new Bee
     candidates = route_candidates(providers, hive_provider, capability, escalated)
     index = scheduler.class_index(package_class)
@@ -52,7 +57,7 @@ def select_route(providers, free, hive_provider, package_class, capability, excl
         if escalated:   # an escalated package takes, among the providers it may use, the one with the best reserve, not list order
             others = [{**p, 'slots': p.get('slots', 1), 'use': p.get('use', 'preferred'), 'limit': p.get('limit', ''), 'protocol': p.get('protocol', ''),
                        'capabilities': scheduler.provider_capabilities(p)} for p in providers if p['name'] not in limited]
-            pick = scheduler.select_provider(others, cls, capability, free, conn=conn)
+            pick = scheduler.select_provider(others, cls, capability, free, conn=conn, rejected=rejected)
             return (pick['name'], cls) if pick else None
         for p in matching:   # with a needed capability every capable provider is a candidate: only the Queen's own one and a local one are taken directly
             if capability and p['name'] != hive_provider and not (p.get('endpoint') or p.get('server')):
@@ -61,7 +66,7 @@ def select_route(providers, free, hive_provider, package_class, capability, excl
                 return p['name'], cls
         others = [{**p, 'slots': p.get('slots', 1), 'use': p.get('use', 'preferred'), 'limit': p.get('limit', ''), 'protocol': p.get('protocol', ''),
                    'capabilities': scheduler.provider_capabilities(p)} for p in providers if p['name'] not in limited]
-        pick = scheduler.select_provider(others, cls, capability, free, conn=conn)
+        pick = scheduler.select_provider(others, cls, capability, free, conn=conn, rejected=rejected)
         return (pick['name'], cls) if pick else None
     return None
 
@@ -102,6 +107,27 @@ def record_embedded_start(conn, project, plan, package, name, cls, provider, mod
     ensure_attempts(conn)
     conn.execute('INSERT INTO embedded_bees(project,plan_path,package,name,class,provider,model,effort,started_at,queen) VALUES (?,?,?,?,?,?,?,?,?,?)',
                  (project, plan, package, name, cls, provider, model, effort, db.now(), queen or ''))
+
+
+def handoff(env, plan, package, queen, launched=False):
+    """Retrieve the durable native launch payload; acknowledge only a real launch."""
+    from . import package_diagnosis
+    with db.transaction(env.conn):
+        rows = unconfirmed_embedded(env.conn, env.name, plan, package)
+        if len(rows) != 1 or not own_embedded(rows[0], queen):
+            raise ValueError('handoff requires one open subagent owned by this Queen')
+        key = 'bee-handoff:' + rows[0]['name']
+        record = json.loads(runtime.kv_get(env.conn, env.name, key) or '{}')
+        if not record:
+            raise ValueError('no durable handoff exists for this legacy attempt')
+        if launched and not record.get('launched'):
+            scope = record.get('scope')
+            if scope and (package_diagnosis.current_commit(env, plan, package) != scope['commit'] or
+                          not package_diagnosis.consume(env.conn, env.name, plan, package, scope, rows[0]['name'])):
+                raise ValueError('repair scope changed; launch authorization is no longer valid')
+            record['launched'] = True
+            runtime.kv_set(env.conn, env.name, key, json.dumps(record))
+        return {**record['payload'], 'launched': bool(record.get('launched'))}
 
 
 # Names that open embedded Bees hold.
@@ -313,9 +339,6 @@ def stopping_embedded(conn, project, plan=None, package=None):
 def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', verify='code', force_failure=False):
     """Record an attempt once. A failed attempt counts only when the same error came again or, for a package closed by code, the same requirement stayed open. A package in state implemented never counts; for a package closed by build or owner open requirements alone never count."""
     ensure_attempts(conn)
-    if outcome == 'succeeded':
-        conn.execute('INSERT OR IGNORE INTO bee_completed VALUES(?,?,?)', (project, plan, package))
-        set_package_state(conn, project, plan, package, 'done')
     if outcome == 'interrupted':
         return
     with db.transaction(conn):
@@ -328,6 +351,16 @@ def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, ope
                     conn.execute('DELETE FROM bee_completed WHERE project=? AND plan_path=? AND package=?', (project, plan, package))
                     set_package_state(conn, project, plan, package, 'working', attempt)
             return
+        if outcome == 'succeeded':
+            conn.execute('INSERT OR IGNORE INTO bee_completed VALUES(?,?,?)', (project, plan, package))
+            set_package_state(conn, project, plan, package, 'done')
+            from . import package_diagnosis
+            state = package_diagnosis._load(conn, project, plan, package)
+            if state and 'completion_generation' not in state:
+                state['completion_generation'] = package_diagnosis.completion_generation(conn, project, plan, package)
+                runtime.kv_set(conn, project, package_diagnosis._key(plan, package), json.dumps(state))
+            key = package_diagnosis.completion_key(plan, package)
+            runtime.kv_set(conn, project, key, str(package_diagnosis.completion_generation(conn, project, plan, package) + 1))
         if attempt:
             epoch = retry_epoch(conn, project, plan, package)
             previous = conn.execute('SELECT open_requirements,error FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND class=? AND rowid>? ORDER BY rowid DESC LIMIT 1', (project, plan, package, cls, epoch or 0)).fetchone()
@@ -338,6 +371,37 @@ def record_attempt(conn, project, plan, package, cls, outcome, attempt=None, ope
             conn.execute('INSERT INTO bee_attempt_signals VALUES(?,?,?,?,?,?,?,?)', (project, plan, package, cls, attempt, json.dumps(open_requirements or []), error, int(counted)))
         if attempt and counted:
             conn.execute('INSERT INTO bee_attempts(project,plan_path,package,class,failures) VALUES(?,?,?,?,1) ON CONFLICT(project,plan_path,package,class) DO UPDATE SET failures=failures+1', (project, plan, package, cls))
+
+
+def attempt_history(conn, project, plan, package, *, before=0, limit=5, attempt=''):
+    """Read existing evidence only; bounded previews and explicit attempt detail."""
+    if not project or not plan or not package:
+        raise ValueError('history requires project, plan and package')
+    if not 1 <= limit <= 20 or before < 0:
+        raise ValueError('history limit must be 1..20 and before must be nonnegative')
+    empty = {'attempts': [], 'total': 0, 'next_before': None}
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bee_attempt_signals'").fetchone():
+        return empty
+    where, values = 'project=? AND plan_path=? AND package=?', [project, plan, package]
+    if attempt:
+        where += ' AND attempt=?'
+        values.append(attempt)
+    total = conn.execute('SELECT COUNT(*) FROM bee_attempt_signals WHERE ' + where, values).fetchone()[0]
+    if before:
+        where += ' AND rowid<?'
+        values.append(before)
+    rows = [dict(r) for r in conn.execute(
+        'SELECT rowid AS sequence, class, attempt, open_requirements, error, counted FROM bee_attempt_signals WHERE '
+        + where + ' ORDER BY rowid DESC LIMIT ?', [*values, limit + 1])]
+    more = len(rows) > limit
+    rows = rows[:limit]
+    for row in rows:
+        row['open_requirements'] = json.loads(row['open_requirements'])
+        row['error_truncated'] = not attempt and len(row['error']) > 500
+        if row['error_truncated']:
+            row['error'] = row['error'][:500]
+    return {'attempts': rows, 'total': total,
+            'next_before': rows[-1]['sequence'] if more else None}
 
 
 # Remember how far a package of a Hive is.
@@ -391,6 +455,15 @@ def failure_count(conn, project, plan, package, cls):
 FAILURE_QUESTION = 'The package remains unsolved at the highest available class. How should it continue?'
 
 
+def is_failure_question(text):
+    """Recognize the canonical failure question with optional diagnostic paragraphs."""
+    text = (text or '').strip()
+    for heading in (FAILURE_QUESTION, tr(FAILURE_QUESTION, language='German')):
+        if text == heading or (text.startswith(heading) and text[len(heading):].startswith(('\n', '\r\n'))):
+            return True
+    return False
+
+
 def retry_epoch(conn, project, plan, package):
     """Last signal before the most recent owner-directed retry; None before any answer."""
     # Signal boundaries advance when answers arrive, regardless of question creation order.
@@ -400,7 +473,7 @@ def retry_epoch(conn, project, plan, package):
 
 def answer_failure_question(conn, question, by):
     """Start a fresh counting cycle once for an owner/coordinator failure answer, retaining history."""
-    if by not in ('owner', 'coordinator') or question['question'] not in (FAILURE_QUESTION, tr(FAILURE_QUESTION, language='German')):
+    if by not in ('owner', 'coordinator') or not is_failure_question(question['question']):
         return
     ensure_attempts(conn)
     key = (question['project'], question['plan_path'], question['item'])
@@ -408,6 +481,54 @@ def answer_failure_question(conn, question, by):
     last = conn.execute('SELECT COALESCE(MAX(rowid),0) FROM bee_attempt_signals').fetchone()[0]
     if conn.execute('INSERT OR IGNORE INTO bee_retry_answers VALUES (?,?,?,?,?,?)', (question['id'], *key, last, json.dumps(counts))).rowcount:
         conn.execute('UPDATE bee_attempts SET failures=0 WHERE project=? AND plan_path=? AND package=?', key)
+
+
+def reconcile_failure_answers(conn, project, plan, package):
+    """Apply an overlooked approval once, only with a provable historical boundary.
+
+    Later counted failures survive. Missing or ambiguous attempt timestamps leave
+    the gate closed rather than granting an unproven retry.
+    """
+    ensure_attempts(conn)
+    key = (project, plan, package)
+    with db.transaction(conn):
+        questions = conn.execute("SELECT * FROM questions WHERE project=? AND plan_path=? AND item=? AND status='answered' AND answered_by IN ('owner','coordinator') ORDER BY answered_at,id", key).fetchall()
+        for q in questions:
+            answered_at = db.parse_time(q['answered_at'])
+            if not is_failure_question(q['question']) or answered_at is None:
+                continue
+            if conn.execute('SELECT 1 FROM bee_retry_answers WHERE question_id=?', (q['id'],)).fetchone():
+                continue
+            # Never replay an older answer across an already consumed newer one.
+            if conn.execute('SELECT 1 FROM bee_retry_answers r JOIN questions q ON q.id=r.question_id WHERE r.project=? AND r.plan_path=? AND r.package=? AND (q.answered_at>? OR (q.answered_at=? AND q.id>?))', (*key, q['answered_at'], q['answered_at'], q['id'])).fetchone():
+                continue
+            epoch = retry_epoch(conn, *key) or 0
+            signals = conn.execute('SELECT rowid,* FROM bee_attempt_signals WHERE project=? AND plan_path=? AND package=? AND rowid>? ORDER BY rowid', (*key, epoch)).fetchall()
+            boundary, remove, later, proven = epoch, {}, False, True
+            for signal in signals:
+                times = conn.execute('SELECT ended_at FROM agents WHERE project=? AND plan_path=? AND package=? AND name=? UNION ALL SELECT ended_at FROM embedded_bees WHERE project=? AND plan_path=? AND package=? AND name=?', (*key, signal['attempt'], *key, signal['attempt'])).fetchall()
+                ended = {db.parse_time(row[0]) for row in times}
+                if len(ended) != 1 or None in ended or '' in ended:
+                    proven = False
+                    break
+                at = next(iter(ended))
+                if at == answered_at:
+                    proven = False
+                    break
+                if at < answered_at:
+                    if later:
+                        proven = False
+                        break
+                    boundary = signal['rowid']
+                    remove[signal['class']] = remove.get(signal['class'], 0) + signal['counted']
+                else:
+                    later = True
+            counts = dict(conn.execute('SELECT class,failures FROM bee_attempts WHERE project=? AND plan_path=? AND package=?', key))
+            if not proven or boundary == epoch or any(n > counts.get(cls, 0) for cls, n in remove.items()):
+                continue
+            conn.execute('INSERT INTO bee_retry_answers VALUES(?,?,?,?,?,?)', (q['id'], *key, boundary, json.dumps(counts)))
+            for cls, n in remove.items():
+                conn.execute('UPDATE bee_attempts SET failures=MAX(0,failures-?) WHERE project=? AND plan_path=? AND package=? AND class=?', (n, *key, cls))
 
 
 # Determine the current or next escalation class.
@@ -758,6 +879,7 @@ def provider_available(conn, project, plan, provider, free, limited, other=None)
     with db.transaction(conn):
         conn.execute('DELETE FROM bee_provider_wait WHERE project=? AND plan_path=?', (project, plan))
         conn.execute("UPDATE hives SET state='waiting',reset_at=NULL WHERE project=? AND plan_path=?", (project, plan))
+        runtime.kv_set(conn, project, 'hive-blocker:' + plan, '')
     return True
 
 
@@ -769,13 +891,48 @@ def escalation_providers(env, plan, package):
     return capable_providers(env.providers, need) if need else env.providers
 
 
-# Record an attempt and file one owner question when the top class is exhausted.
-def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', blocked='', force_failure=False):
-    """Record an outcome and ask once after the highest class fails repeatedly. `blocked` (question:<id>, build, owner, package or provider) means the attempt only waits for that: nothing is counted and the package is set to waiting."""
+# Record attempts and require diagnosis before repeating exhausted repairs.
+def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', blocked='', force_failure=False, repair_result=''):
+    with db.transaction(env.conn):
+        return _report_attempt(env, plan, package, cls, outcome, attempt, open_requirements,
+                               error, blocked, force_failure, repair_result)
+
+
+def _report_attempt(env, plan, package, cls, outcome, attempt, open_requirements, error, blocked, force_failure, repair_result):
+    """Record an outcome and diagnose repeated failures before another attempt. `blocked` (question:<id>, build, owner, package or provider) means the attempt only waits for that: nothing is counted and the package is set to waiting."""
     attempt, foreign = package_branch_violation(env, plan, package, attempt)
     if foreign:
         from . import branchguard
         outcome, error, blocked, force_failure = 'failed', branchguard.failure_text(foreign), '', True
+    handoff_key = 'bee-handoff:' + str(attempt or '')
+    launch = json.loads(runtime.kv_get(env.conn, env.name, handoff_key) or '{}')
+    if launch and not launch.get('launched') and outcome != 'interrupted':
+        from . import package_diagnosis
+        if launch.get('scope') and not package_diagnosis.consume(env.conn, env.name, plan, package, launch['scope'], attempt):
+            raise ValueError('repair scope changed before the unacknowledged result')
+        launch['launched'] = True
+        runtime.kv_set(env.conn, env.name, handoff_key, json.dumps(launch))
+    receipt = None
+    if outcome == 'progress':
+        from . import package_diagnosis, repair_contract
+        if blocked or force_failure:
+            raise ValueError('progress cannot be blocked or a forced failure')
+        state = package_diagnosis._load(env.conn, env.name, plan, package)
+        receipt = repair_contract.result(repair_result, state.get('assigned'), attempt,
+                                         package_diagnosis.current_commit(env, plan, package))
+        if state.get('assigned', {}).get('contract', {}).get('workflow', {}).get('scope'):
+            repair_contract.implementation_evidence(receipt, state['assigned'], package_diagnosis.checkout(env, plan, package))
+        else:
+            outcome = 'observed'  # Preserve an in-flight legacy result without promoting it to a repair.
+        prior = state.get('progress' if outcome == 'progress' else 'observations', {}).get(attempt)
+        if prior:
+            if receipt != prior:
+                raise ValueError('repair progress already recorded with different evidence')
+            return
+        ensure_attempts(env.conn)
+        if env.conn.execute('SELECT 1 FROM bee_attempt_reports WHERE project=? AND plan_path=? AND package=? AND attempt=?',
+                            (env.name, plan, package, attempt)).fetchone():
+            raise ValueError('attempt already reported; progress cannot replace its recorded outcome')
     had_open = bool(unconfirmed_embedded(env.conn, env.name, plan, package))
     if close_embedded(env.conn, env.name, plan, package, 'blocked' if blocked else outcome):   # the embedded Bee of this package has reported
         runtime.append_event(env.conn, env.name, 'The stopped subagent Agent of package %s has ended; its Agent place is free' % package, kind='note', mirror='none')
@@ -786,15 +943,22 @@ def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirem
         return
     row = next((p for p in env.packages(plan) if p['id'] == package), None)
     record_attempt(env.conn, env.name, plan, package, cls, outcome, attempt, open_requirements, error, row['verify'] if row else 'code', force_failure)
+    if receipt:
+        state.setdefault('progress' if outcome == 'progress' else 'observations', {})[attempt] = receipt
+        if outcome == 'progress':
+            state['workflow_progress'] = receipt['implementation']['workflow']
+        runtime.kv_set(env.conn, env.name, package_diagnosis._key(plan, package), json.dumps(state))
+        set_package_state(env.conn, env.name, plan, package, 'working', attempt)
+        package_diagnosis.request(env, plan, package, cls)
     if outcome == 'succeeded':
         env.conn.execute('DELETE FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package))
+        from . import package_diagnosis
+        package_diagnosis.completed(env, plan, package)
     threshold = int(env.settings.get('escalateAfter', 3))
-    excluded = env.settings.get('excludedProviders', [])
-    if outcome == 'failed' and next_attempt(env.conn, env.name, plan, package, cls, escalation_providers(env, plan, package), excluded, threshold) is None:
-        language = roles.language(env.settings)
-        text = tr(FAILURE_QUESTION, language=language)
-        if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, status='open', plan=plan, item=package)):
-            db.add_question(env.conn, env.name, plan, package, text, tr('Review the failed attempts and choose the next approach.', language=language))
+    if outcome == 'failed' and failure_count(env.conn, env.name, plan, package, cls) >= threshold:
+        from . import package_diagnosis
+        package_diagnosis.request(env, plan, package, cls)
+
 
 
 def prepare_agent_worktree(env, plan, package):
@@ -1044,43 +1208,65 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
         if not any(q.get('question') == text for q in runtime.list_questions(env.conn, env.name, plan=plan, item=package)):
             db.add_question(env.conn, env.name, plan, package, text, tr('Configure an eligible provider.', language=language))
         return refuse(env, package, 'no configured provider offers the required class or the capability %s (question filed)' % ', '.join(need) if need else 'no configured provider offers the required class (question filed)')
-    current = base_class
-    if retry_epoch(env.conn, env.name, plan, package) is not None:
-        offered = escalation_providers(env, plan, package)
-        while next_class(offered, current, excluded):
-            current = next_class(offered, current, excluded)
-        cls = current   # the owner's answer directs the retry to the highest offered class
-    queen_class = env.settings.get('queenClass', 'medium')
-    if (scheduler.class_index(requested_class) < scheduler.class_index(queen_class) and
-            failure_count(env.conn, env.name, plan, package, queen_class) >= threshold):
-        current = next_class(escalation_providers(env, plan, package), queen_class, excluded)
-        if current is None:
-            return refuse(env, package, 'the package failed %d times at the Queen class %s and no higher class is offered' % (threshold, queen_class))
-    while failure_count(env.conn, env.name, plan, package, current) >= threshold:
-        previous = current
-        current = next_class(escalation_providers(env, plan, package), current, excluded)
-        if current is None:
-            return refuse(env, package, 'the package failed %d times and no higher class is offered' % threshold)
-        if scheduler.class_index(previous) < scheduler.class_index(queen_class) <= scheduler.class_index(current):
-            env.log('Package %s raised to Queen class %s after failures' % (package, current))
-    ensure_attempts(env.conn)
-    stored = env.conn.execute('SELECT class FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
-    if stored and stored[0] == cls and scheduler.class_index(cls) > scheduler.class_index(current):
-        current = cls   # the package was already escalated to this higher class: keep it even when the failure counters were reset
-    if scheduler.class_index(cls) != scheduler.class_index(current) and not (current == base_class and scheduler.class_index(cls) == scheduler.class_index(requested_class)):
-        return refuse(env, package, 'class %s was requested but the system computes class %s (plan class %s, no stored escalation)' % (cls, current, requested_class))
+    reconcile_failure_answers(env.conn, env.name, plan, package)
+    from . import package_diagnosis
+    review_scope = None
+    review_grant = None
+    exhausted = next((c for c in reversed(scheduler.CLASS_NAMES)
+                      if failure_count(env.conn, env.name, plan, package, c) >= threshold), None)
+    review_state = package_diagnosis._load(env.conn, env.name, plan, package)
+    if exhausted or (review_state and review_state.get('phase') != 'completed'):
+        head = package_diagnosis.current_commit(env, plan, package)
+        review_scope = package_diagnosis.scope(env.conn, env.name, plan, package, head)
+        review_grant = package_diagnosis.authorization(env.conn, env.name, plan, package, review_scope)
+        if not review_grant:
+            package_diagnosis.request(env, plan, package, exhausted or base_class)
+            return refuse(env, package, 'waiting for evidence-based package diagnosis before another repair attempt')
+        task = 'DIAGNOSED REPAIR APPROACH\n' + review_grant['instruction']
+        if review_grant.get('steps'):
+            steps = review_grant['steps']
+        cls = review_grant['class']
+    if review_grant:
+        current = review_grant['class']
+    else:
+        current = base_class
+        if retry_epoch(env.conn, env.name, plan, package) is not None:
+            offered = escalation_providers(env, plan, package)
+            while next_class(offered, current, excluded):
+                current = next_class(offered, current, excluded)
+            cls = current   # the owner's answer directs the retry to the highest offered class
+        queen_class = env.settings.get('queenClass', 'heavy')
+        if (scheduler.class_index(requested_class) < scheduler.class_index(queen_class) and
+                failure_count(env.conn, env.name, plan, package, queen_class) >= threshold):
+            current = next_class(escalation_providers(env, plan, package), queen_class, excluded)
+            if current is None:
+                return refuse(env, package, 'the package failed %d times at the Queen class %s and no higher class is offered' % (threshold, queen_class))
+        while failure_count(env.conn, env.name, plan, package, current) >= threshold:
+            previous = current
+            current = next_class(escalation_providers(env, plan, package), current, excluded)
+            if current is None:
+                return refuse(env, package, 'the package failed %d times and no higher class is offered' % threshold)
+            if scheduler.class_index(previous) < scheduler.class_index(queen_class) <= scheduler.class_index(current):
+                env.log('Package %s raised to Queen class %s after failures' % (package, current))
+        ensure_attempts(env.conn)
+        stored = env.conn.execute('SELECT class FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package)).fetchone()
+        if stored and stored[0] == cls and scheduler.class_index(cls) > scheduler.class_index(current):
+            current = cls   # the package was already escalated to this higher class: keep it even when the failure counters were reset
+        if scheduler.class_index(cls) != scheduler.class_index(current) and not (current == base_class and scheduler.class_index(cls) == scheduler.class_index(requested_class)):
+            return refuse(env, package, 'class %s was requested but the system computes class %s (plan class %s, no stored escalation)' % (cls, current, requested_class))
     queen_provider = scheduler.get_provider(env.providers, hive['provider'])
     embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
     free = scheduler.provider_free(env.providers, running, env.conn)   # A subagent Bee needs a free slot of the Queen's provider like a Bee process
     route_free = dict(free)
     limited = [p['name'] for p in env.providers if scheduler.reserve_zero(p, env.conn)]   # a used-up window (reserve 0) blocks the provider
     ensure_attempts(env.conn)
+    route_reasons = {}
     if embedded:   # a subagent Bee takes a free local provider first, else stays on the Queen's provider, else another one as for other Bees; an escalated package takes the best reserve among them
-        route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, current != base_class or use_other_provider, limited, conn=env.conn)
+        route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, current != base_class or use_other_provider, limited, conn=env.conn, rejected=route_reasons)
     else:   # a process Bee is placed by the normal provider choice like a Queen; the stored assignment keeps only the class (above), the provider is chosen again here
-        route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, True, limited, conn=env.conn)
+        route = select_route(env.providers, route_free, hive['provider'], current, need, excluded, True, limited, conn=env.conn, rejected=route_reasons)
     if not route:
-        return refuse(env, package, 'no provider with a free slot offers class %s' % current)
+        return refuse(env, package, 'Waiting for provider (class %s): %s' % (current, '; '.join('%s: %s (free slots %s/%s)' % (p['name'], route_reasons.get(p['name'], 'not eligible'), free.get(p['name'], 0), p['slots']) for p in env.providers)))
     provider, selected_class = route
     env.conn.execute('INSERT INTO bee_assignments(project,plan_path,package,class,provider) VALUES(?,?,?,?,?) ON CONFLICT(project,plan_path,package) DO UPDATE SET class=excluded.class,provider=excluded.provider', (env.name, plan, package, selected_class, provider))
     pick = scheduler.get_provider(env.providers, provider)
@@ -1088,6 +1274,14 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
     if not pair:
         return refuse(env, package, 'the package worktree could not be prepared; see the round log')
     cwd, branch = pair
+    if review_grant:
+        from . import repair_contract
+        try:
+            inputs = repair_contract.workflow_inputs(cwd, review_grant['contract']['workflow'])
+            if 'workflow_inputs' in review_grant and inputs != review_grant['workflow_inputs']:
+                raise ValueError('Workflow inputs changed after authorization; a fresh workflow review is required')
+        except (OSError, ValueError) as exc:
+            return refuse(env, package, str(exc))
     if not valid_bee_worktree(env, cwd, queen.get('cwd')):
         return refuse(env, package, 'the package worktree is not a separate checkout of this repository')
     # The runner otherwise adds a suffix after the guard was stored. Choose
@@ -1111,7 +1305,15 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
         # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
         prompt = bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')), roles.language(env.settings))
         prompt += '\n\nAssigned worktree: %s; assigned branch: %s. Use the returned environment for every Git command in this Agent, including commands in other worktrees. Environment: %s' % (cwd, branch, json.dumps(git_environment))
-        return {'kind': 'subagent', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
+        prompt_file = env.run_dir(name) / 'handoff-prompt.md'
+        prompt_file.parent.mkdir(parents=True, exist_ok=True)
+        prompt_file.write_text(prompt, encoding='utf-8')
+        payload = {'prompt_file': str(prompt_file.resolve()), 'kind': 'subagent', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
+        if review_grant:
+            package_diagnosis.reserve(env.conn, env.name, plan, package, review_scope, name)
+        runtime.kv_set(env.conn, env.name, 'bee-handoff:' + name,
+                       json.dumps(dict(payload=payload, scope=review_scope, launched=False)))
+        return payload
     if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
         return refuse(env, package, 'an Agent process may not start now (starts paused or stopped, too little free RAM, or no free slot of provider %s)' % provider)
     path = Path(cwd or '')
@@ -1126,6 +1328,8 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
         return refuse(env, package, 'the agent runner could not start the Agent process')
     env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(path.absolute())))
     record_step_count(env.conn, env.name, plan, package, len(steps))
+    if review_grant:
+        package_diagnosis.consume(env.conn, env.name, plan, package, review_scope, name)
     return {'kind': 'process', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute()), 'branch': branch}
 
 

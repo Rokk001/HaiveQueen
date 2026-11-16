@@ -1,6 +1,5 @@
 """Known shared settings transitions need the same drain as database changes."""
 import unittest
-from unittest.mock import patch
 
 import test_release_compatibility_switch as fixtures
 from release_authority_fixture import settings_break

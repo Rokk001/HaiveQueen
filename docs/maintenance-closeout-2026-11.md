@@ -1,0 +1,507 @@
+> Archive: maintenance-closeout-2026-11. Current user guidance: [documentation map](DOCUMENTATION-MAP.md).
+
+# Maintenance delivery inventory
+
+Verified against local and remote main at `983e53216a6fc66cbe3ef6cbce75cb476ffdceb9`.
+This inventory records delivered changes, not a claim that the remaining audit is complete.
+
+## Delivered work
+
+| Request | Integrated evidence |
+|---|---|
+| Responsive branded dashboard, settings navigation, question badge, compact limits and system panels | `bc39e1b`, `6fb421e` |
+| Plan filters, entity inspectors and Queen/agent hierarchy | `bc39e1b`, `ac693d7`, `4db1272` |
+| One view with grouped plan processes; compact missing-value icons and project association | `4db1272`; `web-client.js` grouping renderer and `web_hives_groups_test.cjs` |
+| Queue lists only unstarted queued/draft/submitted plans, without integration duplicates | `4db1272`; `test_queue_overview.py` |
+| Queue entries open full plan details | `73ac65a` |
+| Plan package names, individual expandable steps, readable plan text and technical details | `ac693d7`, `c8c3124`; `web-client.js` package-substeps renderer |
+| Consistent clickable integration stages and running/waiting/failure states | `ac693d7`, `030d417` |
+| Live integration journals and referenced log files, including historical runs | `030d417`, `d7c9f7b` |
+| Keep long failure output inside the log instead of the status heading | `1ac08af` |
+| ODP build/check streaming before command completion | OpenDungeonsPlus `0d7b3bd9ab45119c7a9c82b801aaf2470c2bedf4`, verified ancestor of remote integration/all |
+| Login/setup styling, larger transparent emblem, header/favicon/tray branding | `c9ad23e`, `a9b3c8a`, `ffef090`, `9d22666` |
+| LAN HTTP and HTTPS reverse-proxy login | `c9ad23e`, `4db1272`; trusted-peer handling and LAN regression coverage |
+| Accurate quota display, explanatory tooltips and ten-segment usage bars | `c9ad23e`, `c8c3124`; `.model-limit progress` mask in `web-client.css` |
+| Access-aware provider add/edit forms and capability thresholds | `c9ad23e`, `301ce05`, `9a842c1` |
+| Distinct provider/login status presentation and mobile layout | `6fb421e` |
+| CI/CD release/provider views and copy buttons for output/textareas | `cab4f17`, `55a2199`, `6fb421e` |
+| Workflow toggles, conditional command fields and keyboard-accessible execution choices | `6fb421e`, `983e532`; `web_workflow_controls_test.cjs` |
+| Agent startup no longer reserves build CPU cores | `8a774bc` |
+| Retry question matching and one-time historical approval reconciliation | `24b47b0`, `4db1272` |
+| Entire next-fix findings list disposition, including confirmed functional decisions | `4db1272`; see `maintenance-findings-2026-11.md` for all 25 entries |
+| Web credential masking, bounded login work and trusted proxy policy | `4db1272` |
+| A-01: credentials cannot follow cross-origin API redirects | `c567b1c` |
+| A-02: inbox answers cannot cross project boundaries | `d87bb66` |
+| A-03: persisted process identities verified before stopping work | `95dd61b` |
+| Reported CI portability/fixture/translation failures | `1d51b08`, `4db1272`, `d6a3a73` |
+
+## Validation and boundaries
+
+- Only focused regression tests were run; no full suite, full compile check or build.
+- The real isolated browser interaction test passed on `983e532`, including entity details, settings, questions, live output, copy/update dialogs and language changes. It used mocked services, not production actions.
+- ODP's focused fake-command streaming regression passed during this closeout: output is observed before command exit and retained in the log. No compiler was started.
+- Remote main inclusion is distinct from a green complete CI run; this inventory does not claim that every CI job has finished successfully.
+- OAuth application registration remains deliberately deferred. The historical provider-slot incident remains inconclusive, and exceeding the soft context limit during handoff is intended. These are explicitly recorded in the findings disposition, not silently marked fixed.
+- A-04 and subsequent audit work are not included in this delivery.
+- Production rollout and worktree cleanup are operational steps reported separately; a merged commit does not imply that an already running process has loaded it.
+
+## A-08 verification follow-up
+
+A-08 is resolved by the login budget introduced in `4db1272`. In
+`haivequeen/web_server.py`, `begin_login` limits password hashing to two
+concurrent requests and five accepted attempts in a rolling minute, before
+`web_auth.verify` runs. Excess requests receive HTTP 429 with a retry explanation;
+`end_login` releases the concurrency slot in a `finally` block.
+
+Focused regressions in `test_web_security_findings.SecurityRoutes` verify the
+rate limit before hashing, two concurrent requests with a rejected third,
+released slots, budget expiry, and normal HTTP login. All four targeted tests
+passed. No production process was restarted or changed for this verification.
+## A-10 login input isolation
+
+Resolved: login input is written by one bounded pending writer per session, outside
+ the shared session lock. Requests stop waiting after two seconds; repeated input
+is rejected while a write remains pending. Status and shutdown remain available.
+The regression reproduces a non-reading pipe and verifies bounded request time,
+status access, duplicate rejection and shutdown. Existing interactive login tests
+also pass. No production process was restarted.
+
+## A-25 journal failure isolation
+
+Resolved: journal write errors no longer escape into output-draining threads.
+A bounded in-memory tail (128 records, at most 4096 characters per output record,
+16 failed journals) preserves recent output and terminal status for the process.
+Both returned output and the diagnostic logger identify storage failure and the
+non-durable fallback. A real subprocess emitting several megabytes still completes
+with its original exit code when journal writes fail. Completion-recovery and
+existing live/stall output regressions also pass. Full disk failure can still
+prevent durable receipts; this fix does not claim persistence without storage.
+
+## A-11 update state transactions
+
+Resolved: state mutations use a process/thread lock and unique atomic temporary
+files. Network lookups stay outside the lock and merge only check-owned fields;
+older results cannot overwrite newer checks. Install start and settlement update
+the latest state under the same lock. Both race regressions failed before the fix;
+14 focused update state, check, header and install tests pass.
+
+## A-12 release origin validation
+
+Resolved: checked offers retain their source repository. Install requests and the
+worker reject configured or offered repositories that differ from the installation
+origin before acquiring the update lock or stopping processes. HTTPS and SSH
+origins normalize to the same repository. Two regressions failed before the fix;
+27 focused update tests and four origin tests pass. No update worker was started.
+
+## A-13 atomic question answers
+
+Resolved: ordinary answers validate every rejected package against the question's
+plan before writing. Answer, decision, events and all package changes share one
+transaction. A later write failure rolls everything back. Owner-check answers
+remain notes and do not reject packages. Regressions reproduced both invalid IDs
+and partial writes before the fix; focused answer and terminology tests pass.
+
+## Merge queue: preserve checks after release failure
+
+The merge-queue requirements explicitly retain speculative Merge, Check and Build,
+ordered publication, and replay after a predecessor fails before Push. The CI/CD
+requirements add Release after publication; a failed release cannot remove code
+already pushed. Only Merge, Check, Build and Push failures invalidate followers.
+The regression reproduced a second successor Check after an upload failure, then
+verifies that completed checks and builds survive through successor publication.
+This does not eliminate required replay after pre-push failures or change the
+configured concurrency. Existing Deploy and pre-push replay cases remain covered.
+
+## A-14 atomic owner decisions
+
+Resolved: direct Accept and Reject stage plan files and commit all database changes
+with a durable recovery receipt. Inbox decisions join their existing batch.
+Missing files and late database failures preserve the original state; interrupted
+publication recovers on the next database open without duplicating the decision.
+The regression failed before the fix. All 47 focused owner and inbox tests pass,
+including subprocess exits immediately before and after the database commit.
+
+## Windows console test isolation
+
+Run 43603154526 failed on both Windows versions because two console fixtures
+created completion receipts in the fallback data directory. Console drivers now
+receive dedicated data, config and log directories; standalone runs also load the
+isolation guard. The two affected tests reproduced the exact leak before the fix.
+Nine focused console, receipt-lifetime and isolation tests pass after the fix.
+
+## Integration repair evidence
+
+Action journals record the tested commit, command, worktree and speculative
+predecessors. Worker cancellation is recorded as cancellation rather than a
+project failure. Repair history retains failures, agent reports, before/after
+commits and explicit retry reasons. Empty commits and ended agents without a
+committed tree change or changed command do not rerun the unchanged pipeline.
+Existing attempt limits and owner-stop handling remain in effect.
+
+Five regressions failed before the corresponding changes and pass afterwards,
+including a second failure after the first repair and an integration verification
+record only after all pipeline steps complete. Eight existing fix and owner-reject
+tests also pass. This is the evidence foundation, not completion of cross-plan
+cause coordination or machine-verified targeted repair checks; those remain open.
+
+## Targeted repair verification
+
+Fix agents now supply a regression command tied to the repaired commit and the
+original failure log. HQ executes that command through its durable, resource-bound
+check supervisor before retrying the full integration pipeline. Missing or stale
+evidence, a failed regression, or a changed tree returns to diagnosis with retained
+history. Authentication failures request user action instead of repeated repairs.
+Observer recovery consumes the existing result without starting a duplicate check.
+Unique agent names are assigned before publishing the verification-file location.
+
+Seven focused regressions cover missing evidence, stale commits, failed and passing
+verification, observer recovery, access correction and reused agent names. Existing
+fix-agent, owner-check, run-log, queue and provider-pipeline cases exercise the new
+contract. The original regressions failed before their corresponding fixes.
+Cross-plan common-cause coordination remains open. HQ validates execution and
+commit identity; the supplied explanation still requires the repair agent to choose
+a regression that actually covers the original failure.
+
+## Shared integration diagnostics
+
+Detailed identical local Check/Build diagnostics for the same command and project
+now share one repair leader. Worktree prefixes are normalized; a generic exit or
+wrapper message never establishes a shared cause. Followers retain their failure
+records and wait without starting duplicate fix agents. Their evidence and repair
+history are included in subsequent diagnosis prompts. A second error after the
+first repair keeps followers waiting until the leader's full integration succeeds.
+Followers then merge the published repair and run their own complete pipeline;
+they never inherit a successful check result. A cancelled leader transfers diagnosis
+without being marked successful. Independent speculative work remains enabled.
+
+The two-plan regression reproduced duplicate fix agents before the change and
+passes with two successive failures, targeted verification and both plans reaching
+review. Focused cases cover different diagnostics, generic errors, cancellation,
+observer recovery and unrelated speculative work. This matching is deliberately
+evidence-based: different diagnostic texts or remote provider failures are not
+automatically declared the same root cause. Broader causal diagnosis remains open.
+
+## A-15: Atomic machine settings and project registration
+
+Machine settings saves now register projects and stage the settings file within
+the existing durable file/database transaction. A save or journal-preparation
+failure leaves both unchanged. A publication failure after the database commit
+retains the recovery receipt; the next coordinated read publishes the committed
+settings without registering a project twice.
+
+Three regressions failed before the fix and now pass: settings-write failure,
+journal-preparation failure and publication recovery. Two focused compatibility
+tests also pass for secret preservation and workflow settings round-tripping.
+
+## Speculative queue: access failures
+
+An authentication failure before publication previously released the predecessor's
+queue reservation without invalidating speculative successors. They could retain
+code from the blocked plan. Access failures at Merge, Check, Build or Push now
+use the same durable cancellation/replay path as other pre-publication failures.
+Successors merge again without the blocked plan and continue independently.
+Access failures after publication keep successor checks intact.
+
+The pre-publication regression failed before this fix. Focused coverage also
+checks post-publication access failure, normal failed-check replay, cumulative
+parallel merges and checks, and parallel builds with ordered publication.
+This does not serialize the queue or make successors wait for the repair.
+
+## Technical escalation: retain history without inheriting exhausted attempts
+
+The integration repair counter previously survived successful repairs unchanged.
+A later failure could therefore exhaust the model-class budget before any agent
+had investigated that failure. The regression reproduces a repaired Check followed
+by a distinct failing Build at the highest offered class.
+
+After targeted verification, HQ now retains the original failed step as pending.
+Only that step passing in the normal pipeline completes its attempt budget. Its
+previous counter and log remain in repair history. A targeted command passing
+while the original check still fails does not reset attempts. Nor is a successful
+step recorded as completion of the whole integration.
+
+This fixes one source of premature escalation. Autonomous diagnosis after genuine
+attempt exhaustion and evidence-backed owner questions remain under investigation.
+
+## Diagnosis before exhausted integration repairs reach the owner
+
+An unsuccessful repair without changed code requires diagnosis before another
+repair or a costlier model. A valid structured diagnosis supplied by the repair
+agent is reused without starting an additional agent. Otherwise a diagnosis agent
+reviews the failure instead of automatically asking the owner for an instruction.
+Its prompt includes the failed-run reference, commit and bounded evidence previews;
+existing read-only CLI sources retain the full history and active decisions.
+The fix and diagnosis role instructions live beside the Queen and Agent roles in roles/.
+The plan is referenced rather than embedded, and no duplicate evidence file is created.
+It must report concrete observations and either a justified technical next action
+or the specific product decision, permission or external prerequisite it lacks.
+The diagnosis class is configurable alongside the Queen class; its model and
+effort come from the selected provider's class settings.
+
+A technical diagnosis authorizes one repair without erasing attempt history.
+The authorization is tied to the commit, failed run and active decisions, and is
+consumed only after an agent starts. Changed evidence requires a fresh diagnosis.
+An identical previously authorized approach is rejected rather than retried.
+Owner answers to specific diagnosis questions preserve the attempt count too.
+Targeted verification and the unchanged full integration pipeline remain required.
+
+Focused regressions cover exhausted attempts, concrete product questions, existing
+decisions, stale reports and changes after review, one-use authorization, repeated
+approaches, configurable model/effort, malformed class rejection, early diagnosis,
+reuse of an existing diagnosis, bounded prompts and successful repair verification. Tests use
+isolated repositories and controlled agent reports; they establish orchestration
+behavior, not the diagnostic quality of a live model. Package exhaustion and other
+question creation paths still need the same pre-escalation review. This is not yet
+completion of the broader autonomous technical diagnosis request.
+
+
+### A-18: respect current decisions during question deduplication
+
+- Confirmed that a historical answer (including a later automatic duplicate reference) displaced a newer active decision.
+- Select the latest applicable answer or active decision; automatic duplicate answers do not create new authority. Independent decisions win timestamp ties; mirrored answer records retain the question reference.
+- Preserve project/plan scope and mandatory fresh owner checks. Superseded decisions are excluded.
+- Regression reproduced before the fix: `test_new_decision_supersedes_old_answer_and_auto_duplicates`. Focused coverage: `test_ask_triage` and `test_gui_questions`.
+- This fixes decision lookup, not the still-open package diagnosis workflow.
+
+
+### CI run 43609606492: repair integration test fixtures
+
+- Reproduced all seven errors across six test methods on current main. Project fixtures omitted the workspace and plan required by execution logging.
+- Supply isolated plan files and workspace paths without weakening production logging.
+- Update the release invalidation regression to exercise pending and successful targeted repair verification before pipeline replay.
+- Focused validation: 19 tests passed across CheckRecoveryTests, CoreAccountingTests, release gates and Build/Deploy process registration. No full suite or build ran.
+
+
+### Package diagnosis: retrieve existing attempt evidence
+
+- Add read-only `bzz agent history --project PROJECT --plan PLAN --package PACKAGE`: five recent previews by default, `--before` for older pages, `--attempt` for full stored error detail. Maximum page size is 20.
+- Scope every query to the requested project, plan and package. Reads do not initialize attempt tables or alter counters. No additional evidence file or dependency is introduced.
+- Regression coverage checks scoping, pagination, full detail retrieval, bounded previews, invalid input and absence of database writes. The three initial tests fail without the implementation.
+- This is evidence retrieval for the pending package diagnosis workflow, not completion of automatic diagnosis or retry authorization.
+
+### Package diagnosis before costlier retries
+
+- Repeated package failures now queue a diagnosis at the configured diagnosis class instead of escalating automatically to a stronger class or filing a generic owner question.
+- A validated technical diagnosis grants one retry tied to the current checkout commit, attempt history and active decisions. A class change needs a concrete reason. The grant is consumed only after a successful start; counters and historical approvals remain intact.
+- Diagnosis uses the existing role and existing attempt/decision records, with bounded previews and references. It runs in the package checkout and never changes project files by instruction.
+- Concrete product, permission or external questions block their package and dependent work. Independent packages remain available; Queens are not repeatedly started when all remaining packages await review. Answered questions trigger a fresh review of the decision.
+- Regression cases cover invalid/stale reports, single-use starts, class selection, historical approvals, dependencies, unresolved questions, successful completion and cancelled plans. Fixtures start no live agents.
+- Broader semantic coordination of differently worded integration failures is separate from this package retry change.
+
+### Maintenance push tags
+
+Version v0.2.0 identifies the delivered CI correction. Subsequent maintenance pushes with new commits increment the patch tag once per push, not once per commit. Existing tags are never rewritten.
+
+
+### Shared causes across different integration errors
+
+- Diagnosis receives bounded references to other failed integrations in the same project. An optional structured shared-cause finding must name the peer and provide observations for both failures.
+- Bind the finding to the peer checkout commit, failed step/output, commands and active decisions. Changed evidence, cancelled peers, unknown peers and incomplete evidence are rejected. A peer already waiting on a shared repair cannot become a new leader, preventing cycles.
+- Transfer existing dependent repair groups when consolidating causes. Preserve histories and running processes. Only affected integrations wait; unrelated speculative work keeps its existing parallel flow.
+- The leader must pass targeted repair verification and its required full pipeline before followers merge the published fix and run their own full pipeline. A subsequent failure keeps followers waiting for verified completion.
+- Isolated regression scenarios cover different error texts, a second failure after the first repair, actual structured report consumption, prompt candidate references, stale evidence, cancellation and cycle rejection. Controlled agent reports verify coordination; they do not establish that every live model diagnosis is correct.
+
+
+## A-19: Local LLM HTTP readiness
+
+- Connection reachability no longer implies readiness: authentication failures, rate limits and server errors reject the provider and retain automatic retesting.
+- Empty interface probes accept successful responses or expected schema errors (400/422) without loading a model. Each interface records its HTTP status. Old results without that evidence must be retested.
+- Regression evidence: the initial focused run failed 13 HTTP/cache cases before the fix. Focused coverage exercises all built-in protocols, persisted failures, schema responses, real local HTTP authentication failure and recovery, and existing connection/readiness/round behavior.
+
+
+## A-20: Concurrent offline state updates
+
+- Mark and clear now read and update the offline map inside one write transaction.
+- Recovery probes run without a write transaction. Their results are applied only if that provider's entry still matches the snapshot; other providers' latest state is preserved.
+- Each failure mark gets a revision, including identical messages recorded in the same second. A stale successful probe cannot remove a newer failure; a stale failed probe cannot restore an explicitly cleared entry. Legacy entries remain recoverable.
+- Regression tests reproduced lost updates before the fix using two database connections and controlled probe interleavings; focused coverage includes existing offline scheduling and recovery behavior.
+
+
+## A-21: Remote recovery probes for OpenCode and Kilo
+
+- Replace local version checks with a bounded one-word request to the configured model through the isolated provider environment. Do not auto-approve tools or fall back to a different default model.
+- Require exit zero plus a nonempty model text event and step completion; error events, tool calls, incomplete output, timeouts and unrecognized CLIs cannot release an offline provider.
+- Regression tests first reproduced false recovery, then cover actual recheck state transitions, configured model/environment arguments, incomplete/error responses and missing-model refusal. No live provider credentials or model requests were used in verification.
+- CLI syntax references: https://opencode.ai/docs/cli/commands/ and https://kilo.ai/docs/code-with-ai/platforms/cli-reference . JSON event handling follows the existing agent runner parser.
+
+## A-22: Absolute Codex quota deadline
+
+- Enforce the shared absolute deadline before consuming each response, even when unrelated notifications keep the queue nonempty.
+- Bound the response queue to 32 entries, use deadline-aware backpressure and stop enqueueing during cleanup. The reader owns stdout so cleanup cannot block on another thread's read lock.
+- Bound every helper wait, including after kill. Only the metadata helper created by this request is terminated.
+- Three focused regressions failed before the fix (deadline bypass, unbounded queue and unbounded final wait). Isolated real helper processes additionally verify notification floods, silent output, successful handshakes and reader/process cleanup; no live provider or running application process is used.
+
+## A-23: Resume pending ready-check attempts
+
+- Persist the pending checker per project and normalized plan. Observation timeouts retain it; subsequent calls observe that runner before considering provider availability or starting another checker.
+- Serialize lookup and registration in a write transaction, releasing it before observation. Concurrent callers register only one attempt. Legacy live checkers also block duplicate starts.
+- Deliver the completed attempt's verdict only after its runner exits. Bind retained results to the request, completeness text, working directory and HEAD; changed or unknown scopes require a fresh check after the old one ends. Owner-stop results remain aborted.
+- Three regression tests reproduced duplicate starts and discarded results before the fix. Twenty-one focused tests pass, including concurrent database connections, resumed success/failure, changed requirements, legacy attempts, terminal-but-live runners, existing answer-file handling and start-block rules. No real agents were launched.
+
+## A-24: Git action output is streamed
+
+- Already fixed by `1330d20`: local merge, fetch and push jobs publish output while their subprocess runs rather than waiting for exit.
+- Reverified with `test_git_live_output`: the first output is published while the helper is still waiting, output order and Unicode are preserved, no output is duplicated, and launch failure clears the recorded PID.
+
+## A-25: Journal failure does not block process output
+
+- Already fixed by `758c1a9`: journal write failures retain a bounded in-memory tail and a storage-error notice while draining the subprocess pipe.
+- Reverified with `test_log_drain_failure`: an isolated helper emits 2,000 large lines while journal writes fail, finishes with its real exit code 7, and retains the final line and terminal record.
+- All four focused tests for A-24 and A-25 pass. Only isolated test helpers were launched; running application processes were not touched.
+
+## A-26: Retention for completed action journals
+
+- Apply the existing `retention.logsDays` setting to orchestrator action journals. Both the terminal timestamp and last file modification must be older than the cutoff; zero disables cleanup.
+- Read records incrementally and require a complete start-to-terminal journal. Preserve active, incomplete, malformed, unreadable and concurrently changed files. Do not traverse symlinks or junctions or remove enclosing directories.
+- Two regression tests failed before the change. Thirteen focused retention tests pass, including custom periods, disabled cleanup, active/recent files, changed files and linked-path protection. Tests use isolated temporary data only; production cleanup was not run manually.
+
+## A-27: Incremental integration log pages
+
+- The step-log API returns one selected source per request, at most 32,768 output characters, bounded diagnostic metadata and at most 16 file-reference descriptors. It no longer repeats console output or embeds referenced-file contents in the same response.
+- Journal cursors resume at record/text offsets, including large single output and terminal-message records. Referenced files use byte cursors with UTF-8/UTF-16 boundary handling. Signed, run-scoped references retain the existing plan-output-folder restriction; signed continuation context preserves references split across pages.
+- Terminal metadata uses fixed-size reads and a bounded cache for unchanged files. Initial lookup may scan a long final record backwards; subsequent unchanged polls reuse its metadata. No full output history is retained in the cache.
+- The browser retains at most 65,536 recent output characters. Start-of-log and next-page controls expose complete history, while follow-live resumes polling. Source changes and new runs discard stale responses instead of mixing output.
+- Focused regressions cover bounded reads, complete history reconstruction, partially written records, long terminal diagnostics, reference selection and page boundaries, new attempts and UI navigation. No running application processes are used by these tests.
+
+## A-28: Recover logs after damaged records
+
+- Readers report damaged JSON, invalid record shapes and encoding errors with the byte position, then continue to subsequent recoverable output and terminal records. An unfinished final line remains pending rather than being reported as damage.
+- A new journal write separates an interrupted previous record before appending. Existing bytes are preserved; an already recorded terminal result is not replaced or duplicated.
+- Paged reads advance through oversized damaged records without an unbounded response or a stuck cursor. Terminal metadata validates long messages and falls back past malformed trailing records instead of inventing a successful result.
+- Regression tests reproduce lost output, terminal-write exceptions, hidden corruption, premature acceptance of unfinished records and invalid terminal metadata. Verification uses isolated journals and the existing isolated output-drain helper only.
+
+## A-29: Keep step definitions and progress in the same attempt
+
+- Already fixed by `1330d20`: package details select the newest agent's prompt and restrict progress notes to that agent. A predecessor's completion count cannot mark replacement instructions as done, even when both prompts have the same number of steps.
+- Reverified all three `test_web_plan_details` tests. The replacement regression checks unknown progress before the new agent reports, then current/pending states after its own first report; the other tests cover package metadata and explicit step completion.
+- No runtime state or running agents were changed for this verification.
+
+## A-30: Preserve long owner actions across web restarts
+
+- Record each owner action before starting side effects, then persist progress and completion atomically in the data directory's `owner-jobs` folder. Refuse a new action if its initial record cannot be saved.
+- Web shutdown rejects new jobs and joins its existing owner workers before releasing the service lock or starting a replacement process. Worker threads are no longer daemons. No agent, orchestrator or unrelated subprocess is terminated.
+- Startup recovers saved results. An action interrupted by an unexpected process exit is explicitly reported as having an unknown outcome, with its last progress preserved; it is never automatically replayed. Damaged records remain intact and visible as unreadable history.
+- The authenticated job endpoint exposes recent history, and a reloaded browser restores running actions plus a collapsed history of completed/interrupted actions.
+- Focused regression coverage includes shutdown ordering, result recovery, interrupted work, failed initial persistence, corrupted history, API access and browser history restoration. Isolated service tests exercise restart behavior without touching the installed service.
+
+## A-31: Recover failed web listener changes
+
+- Validate TLS before releasing the working listener. Acquire a different port before closing the old listener; for overlapping same-port address changes, restore the previous listener if the replacement fails.
+- Coordinate reload with configuration writers. Restore the previous web configuration after a failed change while preserving unrelated machine settings. Explicitly report any restoration failure instead of claiming success.
+- Publish listener errors in authenticated dashboard state and display each changed error once in the browser. Polling and the existing reachable interface continue; successful later reloads clear the error.
+- Three regressions failed before the change. Twenty-three focused Python tests and browser client/notification tests pass, covering occupied ports, invalid addresses, missing TLS files, successful changes, existing listener security and service lifecycle behavior. Only isolated test listeners were started.
+
+## A-32: Keep tray status probes off the window thread
+
+- Refresh status in one background worker at a time; the Windows message loop only reads cached snapshots. Slow web status or database access no longer blocks menu handling.
+- Mark unavailable, failed or aged status as outdated and disable state-dependent actions until fresh data arrives. Closing the tray does not wait for an outstanding probe; late results are discarded.
+- Three regression tests failed before implementation. Twelve focused tray tests pass, covering slow probes, bounded worker count, stale status, recovery, late results, existing actions and icon loading. The installed tray and running application processes were not touched.
+
+## A-33: Isolate concurrent database exports
+
+- Each SQLite backup owns an exclusively created temporary file. Failed source access, backup or publication removes only that attempt's temporary file and preserves the previously published backup.
+- Serialize atomic publication and retention across threads and processes using a folder-local OS file lock. Backup creation remains independent; retention tolerates an already removed old file.
+- The overlapping-export regression failed before the change. Nine focused tests pass, including simultaneous backup creation, four separate export processes, failed publication, previous-backup preservation, retention and the export CLI. Tests use temporary databases only.
+
+## A-34: Apply project stall thresholds in the agent runner
+
+- Resolve `agentStallSeconds` through the established machine/project settings merge, matching other runner settings. A project override wins; explicit zero disables stall reporting, and an absent override retains the machine value and existing default.
+- Three regression tests failed before the fix. Four focused runner tests pass with isolated fake CLIs: project enablement, project disablement, a longer project threshold and machine fallback. Every helper finishes normally; stall reporting never terminates it.
+
+## A-35: Distinguish the current step from completed work
+
+- The initial current/done distinction was implemented in `1330d20`. Verification found a remaining false positive: a current-step note mentioning completed preparation elsewhere in its text marked the current step done.
+- Require the completion status immediately after the step count (allowing punctuation), rather than treating any completion word in the description as evidence. Explicit negative completion reports remain current; mismatched definitions remain unknown.
+- The new API-level regression failed before this refinement. All four focused plan-detail tests pass, covering starting work, incidental completion text, negation, explicit completion and replacement-agent progress isolation.
+
+
+## A-16: Keep batch project registration unique
+
+The registration loop now tracks names and resolved workspace paths added earlier in the same request. Later colliding entries follow the existing skip policy; they cannot overwrite the first registration or register a workspace alias twice. Independent entries remain registerable.
+
+Evidence: both tests in `test_k5_new_apiary.BatchRegistrationTests` failed before the change and passed afterward. Coverage includes duplicate names, normalized workspace aliases, an independent subsequent entry, and an idempotent repeated request. The complete focused `test_k5_new_apiary` module passes (7 tests). Production processes are not touched.
+
+
+## A-17: Preserve BOM plan files during lifecycle changes
+
+Status and branch/worktree mutations now decode UTF-8 BOM files consistently with the plan reader and retain the original BOM and LF/CRLF convention when writing. Untouched plan text, including non-ASCII characters and package tables, remains unchanged.
+
+Evidence: `test_plan_encoding` reproduced failed BOM header/status detection and unwanted CRLF conversion before the fix. Both tests pass with all eight encoding/newline combinations; header insertion and replacement are checked byte for byte. The focused run of `test_plan_encoding`, `test_plan_control`, and `test_k6_lifecycle.StatusNameTests.test_an_old_name_is_written_new_at_the_next_status_change` passes all 11 tests. No production process was restarted.
+
+
+## P1 completion verification against 9a88fed
+
+This section supersedes the historical delivery boundary above for the P1 audit findings. Code and regression coverage were inspected against the original acceptance criteria. All 44 focused tests below passed on the current tree. This is not a full-suite or CI claim, nor proof that running production processes have reloaded updated files.
+
+| Finding | Fix commit | Current protection and focused evidence |
+|---|---|---|
+| A-01 | `c567b1c` | `servers._SameOriginRedirect` refuses changes to scheme, host or port and userinfo destinations. `test_api_redirect_security` exercises two real isolated HTTP endpoints, all supported redirect codes, normal LAN HTTP and same-origin requests, plus downgrade rejection. |
+| A-02 | `d87bb66` | Inbox validation checks each answer's project before mutation. `test_inbox.InboxTest` verifies a mixed own/foreign answer batch is rejected without changing answers, decisions or events, while ordinary own-project answers work. |
+| A-03 | `95dd61b` | Persisted pipeline and fix-agent termination requires recorded matching birth identity. `test_stop_identity` covers missing, unreadable, matching and reused identities, a second check before force termination, retained unverified live registrations and supervisor recovery. |
+| A-04 | `d93f2e3` | `proctree.kill_recorded` requires a nonempty matching identity. `test_descendant_identity` covers failed identity capture, saved orphan records, PID reuse and verified child-before-parent cleanup. |
+| A-05 | `309d8b5` | A live scheduler cannot be displaced by heartbeat age. The OS guard remains held throughout recovery and protected work; malformed ownership metadata does not permit takeover. `test_hive_schedule_lock` covers expired live holders, renewed liveness, concurrent recovery, exceptions and dead-holder recovery. |
+| A-06 | `cef6649` | `prepare_rollback` waits for loop, agents and pending launch to settle before installation changes. `test_selfupdate.RollbackQuiescenceTest` checks that reset/install do not occur during draining and owner stop remains effective before, during and after draining. |
+| A-07 | `bd1e458` | `stop_plan` retains its integration reservation while the pipeline worker/supervisor or fix agent remains alive. `test_stop_reservation` checks that successors cannot acquire it early and can proceed after confirmed termination. |
+| A-25 | `758c1a9` | Journal errors retain a bounded fallback without interrupting pipe draining. `test_log_drain_failure` uses an isolated output-heavy helper and injected storage failure; the final output and actual exit code remain available. Durable persistence on a full disk is not promised. |
+
+Command scope: `test_api_redirect_security`, `test_inbox.InboxTest`, `test_stop_identity`, `test_descendant_identity`, `test_hive_schedule_lock`, `test_selfupdate.RollbackQuiescenceTest`, `test_stop_reservation`, `test_log_drain_failure`. Process termination was mocked; only test-owned HTTP endpoints and output helpers were started. No production process or database was changed by verification. Remaining P2/P3 completion reconciliation is tracked separately.
+
+## A-08 through A-18 completion verification against 9b92510
+
+Inspected the current request handlers, state locking, transaction boundaries and decision selection against the original audit acceptance criteria. The following evidence supersedes historical pending descriptions for these findings. The targeted rerun passed 36 tests; no full suite, build, live provider request or production process operation was performed.
+
+| Finding | Fix commit | Protection and focused evidence |
+|---|---|---|
+| A-08 | `4db1272` | Login admission precedes password hashing, with at most two concurrent hashes and five attempts per minute. Three selected `SecurityRoutes` regressions cover admission, concurrent slot release, budget expiry and normal LAN HTTP login. |
+| A-09 | `add3eea` | Accepted control sockets have a read timeout, independent of the accept timeout. `test_web_control_timeout` leaves connections empty or with incomplete headers and verifies subsequent authenticated status, reload and stop on an isolated service. |
+| A-10 | `3b9b91b` | Login input writes occur outside the shared lock, with one pending writer per session and a bounded response wait. `test_login_input_budget` verifies responsive status and close plus refusal to duplicate a pending write. Process termination is mocked. |
+| A-11 | `eab1208` | Short cross-process state transactions merge the latest persisted state after lookup; an older check cannot replace a newer result. `test_update_state_race` covers an intervening install and reversed check completion. |
+| A-12 | `4539908` | Offers record their repository, and both request and worker validate it against installation origin before lifecycle changes. `test_update_origin` verifies matching SSH/HTTPS origins and refusal before worker launch or lock acquisition on mismatch. |
+| A-13 | `dfcc5b0` | Validate all rejected package IDs before answering and commit all writes in one database transaction. `test_answer_atomic` covers invalid IDs/types, valid batches and a late write failure with complete rollback. |
+| A-14 | `f00e378` | Direct accept/reject uses the coordinated durable file/database transaction. `test_owner_atomic` covers missing files, late database errors, locked publication, successful rejection and isolated process exit before/after database commit. Recovery preserves exactly one decision. |
+| A-15 | `507e48c` | Registration and machine-settings publication share the durable transaction. `test_settings_atomic` verifies rollback on save/prepare failure and recoverable publication after commit without duplicate registration. |
+| A-16 | `0d421f8` | Registration tracks names and normalized workspaces accepted earlier in the same batch. The preceding A-16 section records both failing-before regressions and seven passing focused tests; code remains unchanged since that verification. |
+| A-17 | `9a88fed` | Status/header writes retain BOM and original line endings. The preceding A-17 section records eight encoding/newline combinations and eleven passing focused tests; code remains unchanged since that verification. |
+| A-18 | `2b1bddc` | Actual owner/coordinator answers and active decisions compete by recency; automatic duplicate references are not new authority. `test_ask_triage` covers newer decisions, newer answers, same-second precedence, superseded decisions and fresh owner-check requirements. |
+
+Rerun scope: `test_web_control_timeout`, `test_login_input_budget`, `test_update_state_race`, `test_update_origin`, `test_answer_atomic`, `test_owner_atomic`, `test_settings_atomic`, `test_ask_triage` (33 tests), plus the three login-budget methods in `test_web_security_findings.SecurityRoutes`. The isolated control endpoint's stop action concerns only its test service. No installed service is contacted.
+
+## Final A-19 through A-35 verification against 851e788
+
+All 76 focused Python tests and four JavaScript regression scripts passed. This reconciliation completes the original A-01 through A-35 findings together with the preceding verification tables. Historical pending descriptions are superseded by these completion records. This is not a full-suite or current CI result.
+
+| Finding | Fix commit | Verified protection and regression evidence |
+|---|---|---|
+| A-19 | `d14ec181` | HTTP readiness rejects authentication and server failures; expected schema errors are distinguished. `test_servers.HttpReadiness`. |
+| A-20 | `22549adb` | Offline state updates are transactional and stale probes cannot overwrite a newer failure. `test_offline_concurrency`. |
+| A-21 | `ee43ee64` | OpenCode/Kilo recovery requires a bounded actual model response, not a version response. `test_offline_cli_recovery`. |
+| A-22 | `535e7a40` | Quota discovery has an absolute deadline and bounded notification queue and helper cleanup. `test_codex_quota_deadline`. |
+| A-23 | `b1dfeba9` | Ready observation retains and reuses a live pending attempt instead of launching duplicate checks. `test_ready_observation`. |
+| A-24 | `1330d20` | Git output is streamed before exit while retaining order and result. `test_git_live_output`. |
+| A-25 | `758c1a9` | Journal write failure does not stop pipe draining; bounded fallback preserves diagnostics and actual exit. See the preceding P1 verification and `test_log_drain_failure`. |
+| A-26 | `f040259d` | Action journal retention protects active, malformed and concurrently changed files. `test_action_log_retention`. |
+| A-27 | `13607e74` | Bounded incremental pages and client buffers retain access to full history without repeated full reads. `test_action_log_pages`, `test_web_log_pages`, `log_pager_test.cjs`, `step_log_paging_test.cjs`. |
+| A-28 | `2dce7173` | Damaged records are reported while subsequent valid records remain readable; partial tails remain pending. `test_action_log_recovery`. |
+| A-29 | `1330d20` | Progress uses the newest attempt's definitions and notes; incompatible definitions remain unknown. `test_web_plan_details`. |
+| A-30 | `2bdfe96` | Owner jobs are persisted before work, shutdown waits for workers, and interrupted jobs remain visible without replay. `test_web_job_lifecycle`, `web_owner_history_test.cjs`. |
+| A-31 | `cd8ee62` | Failed listener changes restore working configuration and reachability and report the failure. `test_web_reload_recovery`, `web_listener_error_test.cjs`. |
+| A-32 | `f0f0259` | Tray status probes run outside the UI thread; stale status is identified and late closed-cache updates discarded. `test_tray_refresh`. |
+| A-33 | `4603241` | Backup exports use distinct temporary files and serialized publication, retaining an existing valid backup on failure. `test_export_isolation`. |
+| A-34 | `254e6b4` | Agent stall detection honors project overrides including zero to disable the threshold. `test_project_stall`. |
+| A-35 | `a143400` | A current step is not completed merely because its description mentions completed work elsewhere. `test_web_plan_details`. |
+
+Verification used isolated fixtures and test-owned helpers; no production database, agent, orchestrator or tray process was changed. Updating installation files does not reload code already held by running processes.
+
+The separate R-01 through R-05 policies were subsequently approved and implemented as recorded below. This does not claim that no additional defects can exist.
+
+## Approved risk policies R-01 through R-05
+
+| Finding | Implementation | Focused regression evidence |
+| --- | --- | --- |
+| R-01 | New starts wait for a successful quota observation within the existing usage refresh interval. Unknown, failed and expired observations cannot grant quota. Historical display readings and unlimited providers remain supported. | `test_quota_start_freshness`, `test_claude_quota_consumers`, `test_reserve_m2`, `test_codex_live_usage` |
+| R-02 | Durable recovery scope and a payload checksum isolate damaged journals. Original evidence remains on disk; affected starts, inbox processing and file writes wait for verified recovery. Inspection and unrelated projects remain available. A legacy journal without reliable scope blocks starts globally rather than guessing which work is safe. Existing committed-replay and concurrent-edit protection remain intact. | `test_corrupt_recovery_scope`, `test_inbox_recovery`, `test_inbox` |
+| R-03 | Completed action runs snapshot explicitly referenced output logs from their recorded execution directory, retaining original bytes. Browser paging reads the run's snapshot even after its source is replaced or removed. Missing snapshots never silently substitute a later file. Existing `retention.logsDays` removes snapshots together with their completed journal; zero still disables cleanup. | `test_log_snapshots`, `test_web_step_logs`, `test_web_log_pages`, `test_action_log_retention`, `test_action_log_recovery`, `test_action_log_pages`, `test_retention` |
+| R-04 | File availability is separate from lifecycle status. Missing plans are labelled, cannot start new work and retain their packages, results and details. Running jobs are harvested without termination; restoring the file removes the availability block. | `test_missing_plan`, `test_plan_control`, `test_web_plan_details`, `test_o3_dashboard`, `web_plan_actions_test.cjs`, `web_plan_reader_test.cjs` |
+| R-05 | Checkout and Python setup actions use immutable commit IDs. Existing Python dependencies are pinned to `tomlkit==0.15.2` and `setuptools==80.9.0`; release and installation use the same build-backend version. Future updates must change these pins explicitly and run the affected tests. | `test_dependency_pins`, `test_release_workflow`, `test_test_workflow`; pinned backend and runtime dependency import in the test installation |
+
+Each finding has a regression reproduced before its implementation. Verification is limited to the affected tests; no complete suite, compile check or distribution build was run. Production files and running production processes were not changed. Historical runs created before snapshot support remain explicitly labelled as reading the current file rather than an archived snapshot.

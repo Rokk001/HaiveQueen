@@ -1,5 +1,6 @@
 """Authenticated web actions use the same engine functions as the owner UI."""
 import hashlib
+from . import web_secrets
 from contextlib import closing
 from types import SimpleNamespace
 
@@ -30,7 +31,7 @@ def settings_read(conn, project=None):
     data = settings.load_raw(path)
     if not project and 'web' in data:
         data['web'] = {k: v for k, v in data['web'].items() if k != 'password'}
-    return {'data': data, 'revision': revision(data.source)}
+    return {'data': web_secrets.redact(data), 'revision': revision(data.source)}
 
 
 @filetxn.coordinated
@@ -43,7 +44,7 @@ def settings_save(conn, data):
     proposed = data['data']
     if not isinstance(proposed, dict):
         raise ValueError('Settings must be an object')
-    proposed = dict(proposed)
+    proposed = web_secrets.restore(proposed, settings.load_migrated(path), loaded)
     if project and data.get('place') is not None:
         place = data['place']
         if not isinstance(place, dict) or any(not isinstance(place.get(k, ''), str) for k in ('repository', 'plansFolder')):
@@ -68,6 +69,9 @@ def settings_save(conn, data):
         if 'web' in proposed or current['password']:
             proposed['web'] = web
     errors = settings.check(proposed, machine=not bool(project))
+    if project:
+        from . import projsettings
+        errors.extend(projsettings.validate_working_settings(proposed))
     if errors:
         raise ValueError('; '.join(errors))
     loaded.clear()
@@ -77,20 +81,27 @@ def settings_save(conn, data):
     else:
         for provider in proposed.get('providers') or []:
             servers.settle(provider)
-        init.register_listed(conn, proposed.get('projects'))
-        settings.save_file(path, loaded)
+        with filetxn.transaction(conn):
+            init.register_listed(conn, proposed.get('projects'))
+            settings.save_file(path, loaded)
     return {'ok': True, **settings_read(conn, project)}
 
 
 @filetxn.coordinated
 def settings_view(conn, project=None):
     """Derived browser form information, kept separate from editable TOML."""
-    from . import cli_presets, projsettings
+    from . import cli_presets, projsettings, git_provider
     result = settings_read(conn, project)
     if project:
         workspace = str(settings_path(conn, project).parent.parent)
         repository, plans_folder = settings.apiary_place(workspace, result['data'])
         remote, _ = projsettings.derive_remote(repository, result['data'].get('remoteName'))
+        result['data'] = projsettings.working_settings(projsettings.plan_field_settings(result['data']))
+        result['data'].pop('publishReleases', None)
+        remote_url = projsettings._git(repository, 'remote', 'get-url', remote or 'origin')
+        provider, errors = git_provider.discover((remote_url or '').strip())
+        supported = {step: bool(provider and (provider.supports_step(step.title()) if step != 'release' else {'release_tag', 'release_state'} <= provider.capabilities)) for step in projsettings.STEPS}
+        result['git_workflow'] = {'provider': provider.name if provider else '', 'supported': supported, 'errors': errors}
         branch = result['data'].get('integrationBranch') or projsettings.default_branch(repository, remote or 'origin') or 'main'
         result.update(workspace=workspace, repository=repository, place={'repository': repository, 'plansFolder': plans_folder},
                       project_defaults={'integrationBranch': branch},
@@ -102,7 +113,7 @@ def settings_view(conn, project=None):
         migrated = settings.load_migrated(settings_path(conn))
         if 'web' in migrated:
             migrated['web'] = {k: v for k, v in migrated['web'].items() if k != 'password'}
-        result['data'] = migrated
+        result['data'] = web_secrets.redact(migrated)
         offered, connections = {}, {}
         for provider in migrated.get('providers', []):
             key = cli_presets.key_for(provider)
@@ -122,7 +133,7 @@ def queen_providers(conn, project, plan):
     env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == project), None)
     if env is None:
         raise ValueError('Unknown project')
-    cls = env.settings.get('queenClass', 'medium')
+    cls = env.settings.get('queenClass', 'heavy')
     current = (hives.get(conn, project, plan) or {}).get('provider')
     names = [{'name': p['name'], 'current': p['name'] == current,
               'selectable': p['name'] not in env.settings.get('excludedProviders', []) and not p.get('unavailable')}
@@ -136,20 +147,127 @@ def dispatch(action, data):
         return execute(conn, action, data)
 
 
+def plan_control_targets(conn, operation, rows=None):
+    """Server-owned selection; old or individually paused plans never join Resume."""
+    if operation not in ('stop-gracefully', 'force-stop', 'resume'):
+        raise ValueError('Unknown plan control operation')
+    targets = []
+    for row in plan_view.plan_rows(conn) if rows is None else rows:
+        project, plan = row['apiary'], row['plan_path']
+        status = row['status']
+        if row.get('missing') or row.get('error') or status in ('DONE', 'CANCELLED', 'DRAFT'):
+            continue
+        marker = runtime.kv_get(conn, project, 'global-plan-stop:' + plan)
+        before = runtime.kv_get(conn, project, 'plan-prepause:' + plan)
+        eligible = (status == 'PAUSED' and row.get('stopped') and marker and marker == before
+                    and before in hives.plan_mod.QUEEN_STATUSES) if operation == 'resume' else (
+            status in hives.plan_mod.QUEEN_STATUSES or
+            operation == 'force-stop' and status == 'PAUSED' and marker and not row.get('stopped'))
+        if eligible:
+            targets.append({'project': project, 'plan': plan, 'status': status, 'before': before or '',
+                            'marker': marker or ''})
+    return targets
+
+
+def control_plans(conn, data):
+    operation = data.get('operation')
+    if data.get('confirmed') is not True:
+        raise ValueError('Confirm the listed plans first')
+    with loop.hive_schedule_lock():
+        targets = plan_control_targets(conn, operation)
+        if targets != data.get('targets'):
+            raise ValueError('Plan selection changed; review the plans again')
+        for row in targets:
+            project, plan = row['project'], row['plan']
+            with filetxn.transaction(conn):
+                if operation == 'resume':
+                    hives.start_again(conn, project, plan)
+                else:
+                    (hives.pause_plan if operation == 'stop-gracefully' else hives.stop_hive)(conn, project, plan)
+                    runtime.kv_set(conn, project, 'global-plan-stop:' + plan,
+                                   runtime.kv_get(conn, project, 'plan-prepause:' + plan))
+                db.add_event(conn, project, 'plan-control', 'Global plan control: ' + operation,
+                             data={'plan': plan, 'previous_status': row['status'], 'source': 'web-controls'})
+        return {'ok': True, 'count': len(targets)}
+
+
 def execute(conn, action, data):
     project, plan = data.get('project'), data.get('plan')
+    if action in ('plans/create', 'plans/save'):
+        from . import web_drafts
+        return web_drafts.save(conn, data, create=action == 'plans/create')
+    if action == 'plans/control-preview':
+        return plan_control_targets(conn, data.get('operation'))
+    if action == 'plans/control':
+        return control_plans(conn, data)
+    if action == 'releases':
+        from . import web_releases
+        return web_releases.listing(conn, project)
+    if action == 'releases/promotion-status':
+        from . import web_releases
+        return web_releases.promotion_status(conn, project, web_jobs.status(data['id']))
+    if action == 'releases/promote':
+        from . import web_releases
+        if data.get('confirmed') is not True:
+            raise ValueError('Confirm publication of the selected pre-release as a full release')
+        provider, working = web_releases.context(conn, project)
+        return web_jobs.start('release-promotion:' + project,
+                              lambda progress: web_releases.promote(provider, working['releaseMode'], data['tag'], progress))
+    if action == 'git-login/providers':
+        from . import git_provider
+        return git_provider.login_options()
+    if action == 'git-login/token':
+        from . import git_provider
+        options = next((row for row in git_provider.login_options() if row['name'] == data['provider']), None)
+        if not options:
+            raise ValueError('Unknown Git provider')
+        if options.get('error'):
+            raise ValueError(options['error'])
+        if options.get('origin_required'):
+            from urllib.parse import urlsplit
+            origin = data.get('origin', '').rstrip('/')
+            parsed = urlsplit(origin)
+            if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
+                raise ValueError('Gitea requires an HTTPS origin')
+            config.save_git_credential(data['provider'], data['token'], options.get('token_method', 'token'), origin=origin)
+        else:
+            config.save_git_credential(data['provider'], data['token'], options.get('token_method', 'token'))
+        return {'ok': True}
+    if action in ('git-login/start', 'git-login/poll'):
+        raise ValueError('Git provider device sign-in is deferred; use an access token')
     if action == 'state':
         state = dashboard_data.snapshot(conn, project)
         for row in state.get('hives', []):
             row['stopped'] = bool(row.get('paused')) and hives.is_stopped(conn, row['apiary'], row['plan_path'])
         state['controls'] = {'orchestrator': ['Start', 'Stop gracefully', 'Force stop'], 'web': ['Stop', 'Restart'], 'force_warning': FORCE_WARNING}
+        plan_rows = plan_view.plan_rows(conn)
+        state['controls']['plans'] = {operation: len(plan_control_targets(conn, operation, plan_rows))
+                                      for operation in ('stop-gracefully', 'force-stop', 'resume')}
         state['projects'] = db.rows(conn, 'SELECT name,workspace,colour,priority FROM projects ORDER BY name')
+        from . import web_drafts
+        for row in state['projects']:
+            row.update(web_drafts.project_options(row['workspace']))
         return state
     if action == 'questions':
-        questions = runtime.list_questions(conn, project, status='open')
+        from . import web_drafts
+        questions = runtime.list_questions(conn, project, status=None if data.get('history') in (True, '1') else 'open', plan=plan)
+        if data.get('compact') in (True, '1'):
+            for question in questions:
+                question['details_pending'] = True
+                question['owner_check_result'] = db.owner_check_result(conn, question['id'])
+            return questions
         for question in questions:
+            web_drafts.question_context(conn, question)
             question['packages'] = question_service.plan_packages(conn, question['project'], question['plan_path'])
         return questions
+    if action == 'questions/detail':
+        from . import web_drafts
+        rows = db.rows(conn, 'SELECT id,project,plan_path,item,question,recommendation,status,answer,answered_by,created_at,answered_at FROM questions WHERE id=? AND status != ?', (int(data['id']), 'fault_check'))
+        if not rows:
+            raise KeyError('Unknown question')
+        question = web_drafts.question_context(conn, rows[0])
+        question['packages'] = question_service.plan_packages(conn, question['project'], question['plan_path'])
+        return question
     if action == 'plan/step-log':
         from . import orchestrator
         step = data.get('step')
@@ -158,7 +276,7 @@ def execute(conn, action, data):
         if not conn.execute('SELECT 1 FROM plans WHERE project=? AND path=?', (project, plan)).fetchone():
             raise ValueError('Unknown plan')
         from . import web_step_logs
-        return web_step_logs.read(conn, project, plan, step)
+        return web_step_logs.read(conn, project, plan, step, page_request=data)
     if action == 'plan/detail':
         from pathlib import Path
         row = next((row for row in plan_view.plan_rows(conn)
@@ -173,8 +291,12 @@ def execute(conn, action, data):
         if not source.is_relative_to(workspace):
             raise ValueError('Plan is outside the project workspace')
         from . import plans as plan_files, web_plan_details
-        text = source.read_text(encoding='utf-8-sig')
-        return {'plan': row, 'text': text, 'body': plan_files.split_front_matter(text)[1],
+        raw = b'' if row.get('missing') else source.read_bytes()
+        text = raw.decode('utf-8-sig').replace('\r\n', '\n').replace('\r', '\n')
+        from . import web_drafts
+        return {'revision':web_drafts.revision(raw) if not row.get('missing') else '',
+                'open_questions':[web_drafts.question_context(conn, q) for q in runtime.list_questions(conn, project, status='open', plan=plan)],
+                'plan': row, 'text': text, 'body': plan_files.split_front_matter(text)[1],
                 'packages': web_plan_details.packages(conn, project, plan, text),
                 'hive': hives.get(conn, project, plan)}
     if action == 'plans':
@@ -191,8 +313,22 @@ def execute(conn, action, data):
         return settings_view(conn, project)
     if action == 'settings/save':
         return settings_save(conn, data)
+    if action == 'provider/mcp':
+        from . import mcp_setup
+        if data.get('confirmed') is not True:
+            raise ValueError('Confirm importing and testing MCP configuration in the HaiveQueen profile.')
+        _, machine, _ = owner.provider_settings(data['provider'])
+        provider = next(p for p in sch.get_providers(machine) if p['name'] == data['provider'])
+        setup = mcp_setup.validate(data['configuration'])
+        return web_jobs.start('mcp:' + provider['name'], lambda _progress: mcp_setup.configure(provider, setup, confirmed=True))
+    if action == 'provider/updates':
+        from . import cli_updates
+        _, machine, _ = owner.provider_settings(data['provider'])
+        provider = next(p for p in sch.get_providers(machine) if p['name'] == data['provider'])
+        return cli_updates.notice(provider, refresh=True)
     if action == 'providers':
-        return [{'name': p['name'], 'logged_in': profile.has_login(p), 'ready': servers.readiness(p, profile.has_login(p))} for p in sch.get_providers(config.load_config())]
+        from . import cli_updates, mcp_setup
+        return [{'mcp': mcp_setup.status(p), 'name': p['name'], 'cli_update': cli_updates.notice(p), 'logged_in': profile.has_login(p), 'ready': servers.readiness(p, profile.has_login(p))} for p in sch.get_providers(config.load_config())]
     if action == 'provider/test':
         result = servers.run_test(data['server'])
         return {'ok': True, 'result': result, 'message': servers.summary(data['server'])}
@@ -209,7 +345,7 @@ def execute(conn, action, data):
                 return startctx.benchmark(worker, machine, provider, progress=progress)
         return web_jobs.start('benchmark:' + provider, measure)
     if action == 'jobs/status':
-        return web_jobs.status(data['id'])
+        return web_jobs.status(data['id']) if data.get('id') else web_jobs.recent()
     if action == 'tools/install':
         from . import bzz_install
         return web_jobs.start('tools:install', lambda _progress: bzz_install.install())
@@ -217,7 +353,10 @@ def execute(conn, action, data):
         row = runtime.get_agent(conn, project, data['agent'])
         if not row:
             raise ValueError('Unknown Agent')
-        return {'lines': dashboard_data.live_lines(dashboard_data.live_path(row['project'], row['name']))}
+        from . import live_activity
+        path = dashboard_data.live_path(row['project'], row['name'])
+        return {'lines': dashboard_data.live_lines(path),
+                'activity': live_activity.read(path.with_name('events.jsonl'), row.get('status'))}
     if action == 'login/start':
         _, machine, _ = owner.provider_settings(data['provider'])
         provider = next(p for p in sch.get_providers(machine) if p['name'] == data['provider'])
@@ -228,9 +367,10 @@ def execute(conn, action, data):
         return web_login.send(data['id'], data['text'])
     if action == 'updates':
         settled = updates.settle_install(db.last_self_update(conn))
-        return {**updates.load_state(), 'waiting': updates.waiting_status(), 'restart_required': settled == 'ok'}
+        return {**updates.display_state(), 'waiting': updates.waiting_status(), 'restart_required': settled == 'ok'}
     if action == 'updates/check':
-        return updates.check(config.load_config(), manual=data.get('automatic') is not True)
+        updates.check(config.load_config(), manual=data.get('automatic') is not True)
+        return {**updates.display_state(), 'waiting': updates.waiting_status()}
     if action == 'updates/install':
         if data.get('confirmed') is not True:
             raise ValueError(updates.TEXT_CONFIRM % data.get('version', ''))
@@ -249,7 +389,7 @@ def execute(conn, action, data):
                 env, names = queen_providers(conn, project, plan)
                 if data.get('provider') not in [p['name'] for p in names if p['selectable']]:
                     raise ValueError('Select a provider offering the Queen class')
-                hives.requeen(conn, project, plan, data['provider'], providers=env.providers, queen_class=env.settings.get('queenClass', 'medium'), excluded=env.settings.get('excludedProviders', []))
+                hives.requeen(conn, project, plan, data['provider'], providers=env.providers, queen_class=env.settings.get('queenClass', 'heavy'), excluded=env.settings.get('excludedProviders', []))
             else:
                 fn = {'plan/start': hives.start_plan, 'plan/back-to-draft': hives.back_to_draft, 'plan/stop-gracefully': hives.pause_plan, 'plan/force-stop': hives.stop_hive, 'plan/resume': hives.start_again, 'plan/cancel': hives.cancel_plan}[action]
                 fn(conn, project, plan)

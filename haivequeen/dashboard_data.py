@@ -1,5 +1,6 @@
 """Browser dashboard data: one plain-dict snapshot read from the database."""
 import re
+import json
 import shutil
 import sys
 from datetime import datetime, timedelta
@@ -137,8 +138,21 @@ def status_text(hive) -> str:
     suffix = " (#" + ", #".join(map(str, questions)) + ")" if questions else ""
     if state in ("answer", "owner_check") and questions:
         return (tr("Waiting for owner check") if state == "owner_check" else tr("Waiting for answer")) + suffix
-    if hive.get("blocker") and state in ("running", "waiting", "starting", "requeen", "codex_wait", "provider_wait", "integration_wait"):
-        return blocker_text(hive["blocker"]) + suffix
+    if state == "answer" and not questions:
+        state = "waiting"   # old snapshots may still refer to an answered question
+    if hive.get('running_diagnoses'):
+        return tr('Diagnosis running: %s', ', '.join(hive['running_diagnoses']))
+    scheduler_state = hive.get('scheduler_state')
+    if state in ('waiting', 'starting', 'requeen', 'codex_wait', 'provider_wait', 'running') and scheduler_state in ('STOPPED', 'STOPPING', 'PAUSED', 'STOP'):
+        return tr({'STOPPED': N_('Orchestrator stopped'), 'STOP': N_('Orchestrator stopped'),
+                   'STOPPING': N_('Orchestrator stopping'), 'PAUSED': N_('Orchestrator paused')}[scheduler_state])
+    blocker = hive.get("blocker")
+    if not questions and str(blocker or '').startswith('Plan state "answer"'):
+        blocker = None
+    if blocker and state in ("running", "waiting", "starting", "requeen", "codex_wait", "provider_wait", "integration_wait"):
+        return blocker_text(blocker) + suffix
+    if state in ('codex_wait', 'provider_wait'):
+        return tr('Waiting for scheduler reassessment')
     if state == "running":
         return tr("No active Queen") + (tr("; open questions %s", "#" + ", #".join(map(str, questions))) if questions else "")
     if state == "done":
@@ -258,11 +272,15 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
     done -= rejected_pkgs
     running_pkgs = {a.get("package") for a in mine if a.get("phase") == "bee" and a.get("status") in runtime.ACTIVE_STATUSES and a.get("package")}
     running_pkgs |= {b["package"] for b in embedded or () if (b["project"], b["plan_path"]) == key and b.get("package")}   # a Bee that runs as a subagent of the Queen is busy too
+    running_agents = sum(1 for a in mine if a.get('phase') != 'queen' and a.get('status') in runtime.ACTIVE_STATUSES)
+    running_agents += sum(1 for b in embedded or () if (b['project'], b['plan_path']) == key)
     open_pkgs = {p for (pr, pl, p) in (assigned or {}) if (pr, pl) == key and p not in done} | running_pkgs
     progress = min(100, round(100 * len(done) / total_pkg)) if total_pkg else 0
     is_paused = key in (paused or ())
     is_rejected = key in (plan_rejected or ())
-    if is_rejected:
+    if (orch or {}).get(key, {}).get("stopping"):
+        status, kind = tr("Stopping"), "wait"
+    elif is_rejected:
         status, kind = tr("Plan cancelled"), "wait"
     elif is_paused:
         status, kind = (tr("Running, plan paused") if live else tr("Plan paused")), "wait"
@@ -271,6 +289,8 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
     elif (orch or {}).get(key):   # the Orchestrator integrates the plan: its chain and counter are drawn in the table
         info = orch[key]
         status, kind = (tr("Fix agent running") if info["phase"] == "fix" else tr("Integration %d/%d", info["n"], info["m"])), "ok"
+        if info['phase'] == 'diagnosing':
+            status, kind = info['task'], 'error'
     else:
         status = status_text(hive)
         kind = "wait" if status else "idle"
@@ -289,7 +309,7 @@ def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_lim
             "queen_tin": qin, "queen_tout": qout, "hive_tin": hin, "hive_tout": hout,
             "steps": {b["name"]: b["step"] for b in hive.get("bees", []) if b.get("step")},
             "package_steps": {p: r["step"] for p, r in (hive.get("package_steps") or {}).items()},
-            "bees_running": len(running_pkgs), "bees_total": len(open_pkgs) if live else len(running_pkgs), "live": live, "paused": is_paused, "plan_rejected": is_rejected, "done": len(done), "implemented": (implemented or {}).get(key, 0), "rejected": len(rejected_pkgs), "waiting": len(waiting_pkgs), "waiting_reasons": ", ".join("%s %s" % (p, why) for p, why in waiting_pkgs), "total": total_pkg, "progress": progress,
+            "bees_running": running_agents, "bees_total": max(running_agents, len(open_pkgs)) if live else running_agents, "live": live, "paused": is_paused, "plan_rejected": is_rejected, "done": len(done), "implemented": (implemented or {}).get(key, 0), "rejected": len(rejected_pkgs), "waiting": len(waiting_pkgs), "waiting_reasons": ", ".join("%s %s" % (p, why) for p, why in waiting_pkgs), "total": total_pkg, "progress": progress,
             "status": status, "kind": kind, "runtime": fmt_elapsed(queen.get("started_at"), now) if live else (fmt_elapsed((orch or {}).get(key, {}).get("started"), now) if not (is_rejected or is_paused) and (orch or {}).get(key) else ""),
             "orch": (orch or {}).get(key) if not (live or is_rejected or is_paused) else None}
 
@@ -357,11 +377,11 @@ def orch_info(conn, env, hive, now=None) -> dict:
     {phase, step, chain: [(step, "done"|"running"|"red"|"todo")], n, m, task, status, fix_agent, fix_task, started}; a step without a command is not part of the chain and not counted."""
     from . import orchestrator
     state = orchestrator.load(conn, hive["project"], hive["plan_path"])
-    if not state or state.get("phase") not in ("pipeline", "fix"):
+    if not state or state.get("phase") not in ("pipeline", "fix", "diagnosing"):
         return None
     steps = orchestrator.chain(env) if env is not None else list(orchestrator.STEPS)
     done = state.get("steps") or {}
-    chain = [(s, done.get(s) if done.get(s) in ("done", "running", "red") else "todo") for s in steps]
+    chain = [(s, done.get(s) if done.get(s) in ("done", "running", "red", "skipped") else "todo") for s in steps]
     fix = state.get("fix") or {}
     step = fix.get("step") if state["phase"] == "fix" and fix.get("reason") == "step" else state.get("step")
     n = steps.index(step) + 1 if step in steps else len(steps)
@@ -370,13 +390,29 @@ def orch_info(conn, env, hive, now=None) -> dict:
         word = "red"
     waiting = state['phase'] == 'pipeline' and bool(hive.get('blocker')) and not state.get('job')
     if waiting:
-        chain = [(name, 'waiting' if name == step else status) for name, status in chain]
+        if not (state.get('provider') and done.get(step) == 'running'):
+            chain = [(name, 'waiting' if name == step else status) for name, status in chain]
         word = 'waiting'
     task = "Integration: %s %s" % (step, word) if step in steps else ("Integration: owner rejection" if fix.get("reason") == "owner" else "Integration: Close")
+    if state['phase'] == 'diagnosing':
+        from . import check_events
+        task = check_events.summary(state.get('job', {}).get('checks', {}))
+        task += ' ' + (tr('Integration place released; diagnostic resources remain reserved.') if state.get('diagnosis_released') else
+                       tr('Integration place retained: %s', state.get('diagnosis_release_reason', '')))
+    stopping = bool(state.get("stopping"))
+    if stopping:
+        task = tr("Stopping") + ": " + str(step)
+    job = state.get("job") or {}
+    interrupted = bool(job.get("pid")) and not orchestrator.agent_process.recorded_alive(job["pid"], job.get("identity"))
+    if interrupted and not state.get("provider") and state['phase'] != 'diagnosing':
+        waiting = True
+        task = "Integration: %s awaiting recovery" % step
+        chain = [(name, 'waiting' if name == step else status) for name, status in chain]
     running = state["phase"] == "pipeline" and not waiting
     reason = "owner rejection" if fix.get("reason") == "owner" else "%s red" % fix.get("step")
-    return {"phase": state["phase"], "step": step, "chain": chain, "n": n, "m": len(steps), "task": task, "status": "running" if running else "waiting",
-            "fix_agent": fix.get("agent") or "", "fix_task": "Fix: " + reason, "started": state.get("started"), "version": job_version(state)}
+    return {"phase": state["phase"], "step": step, "chain": chain, "n": n, "m": len(steps), "task": task, "stopping": stopping, "status": "stopping" if stopping else "running" if running else "waiting",
+            "fix_agent": fix.get("agent") or "", "fix_task": "Fix: " + reason, "started": state.get("started"),
+            "version": job_version(state), "provider": state.get("provider") or {}, "skipped": state.get("skipped") or {}}
 
 
 # Build the Orchestrator row and the fix agent row of a plan.
@@ -399,13 +435,14 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
     `hive_keys` limits the waiting rows to the (project, plan) pairs whose Queen is running: only a running Queen starts Agents, so the assignments of any other Plan are not waiting Agents.
     With `hive_rows` (the Plan rows) every Plan with a running Queen gets the Queen's row first and its Agents directly below it; Agents of other Plans follow."""
     rows, seen = [], set()
+    integration_agents = {(r.get('project'), r.get('agent')) for group in (orch or {}).values() for r in group if r.get('agent')}
     for agent in agents:
-        if (agent.get("phase") == "bee" or (agent.get("phase") == "verify" and agent.get("package") == "READY-CHECK")) and agent.get("status") in runtime.ACTIVE_STATUSES:
+        if agent.get('phase') != 'queen' and (agent.get('project'), agent.get('name')) not in integration_agents and agent.get("status") in runtime.ACTIVE_STATUSES:
             rows.append(bee_row(agent, now, steps, ctx_limit, package_steps))
+            if agent.get('phase') not in ('bee',):
+                rows[-1]['task'] = agent.get('dashboard_task') or str(agent.get('phase') or 'Agent').capitalize() + (': ' + agent['package'] if agent.get('package') else '')
             seen.add((agent.get("project"), agent.get("plan_path"), agent.get("package")))
     for bee in embedded or ():   # a Bee that runs as a subagent of its Queen has no agent row: it shows up under her like any other Bee
-        if hive_keys is not None and (bee["project"], bee["plan_path"]) not in hive_keys:
-            continue
         step = (package_steps or {}).get((bee["project"], bee["plan_path"], bee["package"])) or (steps or {}).get(bee["name"], "")
         queen = next((a for a in agents if a.get("phase") == "queen" and a.get("status") in runtime.ACTIVE_STATUSES
                       and (a.get("project"), a.get("plan_path")) == (bee["project"], bee["plan_path"])), None)
@@ -449,8 +486,16 @@ def bee_list(agents, assigned, completed, now, ctx_limit=None, steps=None, hive_
             mine = [r for r in rows if (r["apiary"], r["plan_path"]) == (hive["apiary"], hive["plan_path"])]
             ordered += [queen_row(hive)] + mine
             placed.update(id(r) for r in mine)
-        elif (orch or {}).get((hive["apiary"], hive["plan_path"])):
+        if (orch or {}).get((hive["apiary"], hive["plan_path"])):
             ordered += orch[(hive["apiary"], hive["plan_path"])]
+    represented = {(r.get('project'), r.get('agent')) for r in ordered + rows if r.get('agent')}
+    for agent in agents:
+        if agent.get('status') in runtime.ACTIVE_STATUSES and (agent.get('project'), agent.get('name')) not in represented:
+            row = bee_row(agent, now, steps, ctx_limit, package_steps)
+            if agent.get('phase') == 'queen':
+                row.update(kind='queen', task='Queen')
+            rows.append(row)
+            represented.add((agent.get('project'), agent.get('name')))
     return ordered + [r for r in rows if id(r) not in placed]
 
 
@@ -510,14 +555,16 @@ def activity_rows(agents_all, now) -> list:
     return rows
 
 
-# Read the integration queue and open questions for the apiary-queue panel.
+# Pending plans, rather than the separate integration execution queue.
 def queue_panel(conn, project) -> dict:
-    """Open question count, queued integration rows and their short labels (PROJECT#id)."""
     where, args = ("WHERE project=?", (project,)) if project else ("", ())
     glue = " AND" if where else " WHERE"
     open_q = conn.execute("SELECT COUNT(*) FROM questions " + where + glue + " status='open'", args).fetchone()[0]
-    queued = db.rows(conn, "SELECT id,project,plan_path,branch,status,note,updated_at FROM queue " + where + glue + " status IN ('ready','in_run') ORDER BY id", args)
-    return {"open": open_q, "queued": len(queued), "items": queued, "labels": ["%s#%d" % (q["project"], q["id"]) for q in queued][:4]}
+    queued = db.rows(conn, "SELECT project,path AS plan_path,title,status,updated_at FROM plans " + where + glue +
+                     " status IN ('DRAFT','SENT','QUEUED') AND NOT EXISTS (SELECT 1 FROM hives h WHERE h.project=plans.project AND h.plan_path=plans.path AND h.state!='done') ORDER BY CASE status WHEN 'QUEUED' THEN 0 WHEN 'SENT' THEN 1 ELSE 2 END, project,path", args)
+    drafts = sum(row['status'] == 'DRAFT' for row in queued)
+    return {"open": open_q, "queued": len(queued), "drafts": drafts, "pending": len(queued)-drafts,
+            "items": queued, "labels": [row['title'] or hive_name(row['plan_path']) for row in queued]}
 
 
 # Tell routine round events that report nothing apart from the rest.
@@ -706,7 +753,18 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
         base = {"cores": sysinfo["cores"], "total_mb": total, "free_mb": total - int(sysinfo["ram_used_gb"] * 1024), "host": "gui", "compiler_count": None}
     d = overview.collect(conn, project, now, cfg, base)
     agents_all = runtime.list_agents(conn, project, "all")
-    agents = [a for a in agents_all if not a.get("archived")]
+    agents = [a for a in agents_all if not a.get("archived") or a.get('status') in runtime.ACTIVE_STATUSES]
+    active_agents = {(a.get('project'), a.get('plan_path'), a.get('name')): a for a in agents
+                     if a.get('status') in runtime.ACTIVE_STATUSES}
+    for entry in db.rows(conn, "SELECT project,key,value FROM kv WHERE key LIKE 'package-diagnosis:%'"):
+        try:
+            state = json.loads(entry['value'])
+            plan, package = json.loads(entry['key'].split(':', 1)[1])
+            agent = active_agents.get((entry['project'], plan, state.get('agent')))
+            if agent:
+                agent['dashboard_task'] = 'Diagnosis: ' + package
+        except (ValueError, TypeError, KeyError, AttributeError):
+            continue
     packages = {(r["project"], r["plan_path"]): r["n"] for r in
                 db.rows(conn, "SELECT project, plan_path, COUNT(*) AS n FROM packages GROUP BY project, plan_path")}
     try:
@@ -729,7 +787,16 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     plan_rejected = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='CANCELLED'")}
     plan_done = {(r[0], r[1]) for r in conn.execute("SELECT project, path FROM plans WHERE status='DONE'")}   # rejected and done Hives only show in the Hives window
     embedded = embedded_rows(conn)
+    if project:
+        embedded = [b for b in embedded if b['project'] == project]
     hive_data = hives.hive_data(conn, project, agents)
+    active_keys = {(a.get('project'), a.get('plan_path') or '') for a in agents if a.get('status') in runtime.ACTIVE_STATUSES}
+    active_keys.update((b['project'], b['plan_path']) for b in embedded)
+    existing_keys = {(h['project'], h['plan_path']) for h in hive_data}
+    for pr, path in sorted(active_keys - existing_keys):
+        queen = next((a for a in agents if a.get('project') == pr and (a.get('plan_path') or '') == path
+                      and a.get('phase') == 'queen' and a.get('status') in runtime.ACTIVE_STATUSES), None)
+        hive_data.append(dict(project=pr, plan_path=path, state='running', queen=queen))
     orch = {}
     for h in hive_data:
         try:
@@ -738,7 +805,21 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
             info = None
         if info:
             orch[(h["project"], h["plan_path"])] = info
+    try:
+        from . import loop
+        orchestrator = orchestrator_state(d["run"]["state"], loop.loop_running(), loop.stop_flag().exists())
+    except Exception:   # a broken lock file must not stop the window: show the run state alone
+        orchestrator = orchestrator_state(d["run"]["state"], 1, False)
+    for hive in hive_data:
+        hive['scheduler_state'] = orchestrator['label']
     hive_rows = [hive_row(h, agents, packages, now, assigned, completed, ctx_limit, agents_all, impl, paused, rejected, waiting, embedded, plan_rejected, orch) for h in hive_data]
+    from . import filetxn
+    for row in hive_rows:
+        recovery = filetxn.recovery_block_reason(conn, row['apiary'])
+        if runtime.plan_missing(conn, row['apiary'], row['plan_path']):
+            row.update(status=tr('Plan file missing'), missing=True, kind='wait')
+        elif recovery:
+            row.update(status=tr('Recovery blocked'), recovery_error=recovery, kind='wait')
     orch_table = {(h["apiary"], h["plan_path"]): orch_rows(h, h["orch"], agents, now, ctx_limit) for h in hive_rows if h.get("orch")}
     live = [a for a in agents if a.get("status") in runtime.ACTIVE_STATUSES]
     queens = [a for a in live if a.get("phase") == "queen"]
@@ -760,19 +841,16 @@ def snapshot(conn, project=None, now=None, cfg=None, sysinfo=None) -> dict:
     kept = [e for e in events if not is_noise(e)][:LOG_LINES]   # the newest LOG_LINES events that carry news, plus the noise that is newer than the oldest of them
     floor = kept[-1]["id"] if kept else 0
     events = [e for e in events if e["id"] >= floor]
-    try:
-        from . import loop
-        orchestrator = orchestrator_state(d["run"]["state"], loop.loop_running(), loop.stop_flag().exists())
-    except Exception:   # a broken lock file must not stop the window: show the run state alone
-        orchestrator = orchestrator_state(d["run"]["state"], 1, False)
-    shown = [h for h in hive_rows if not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done]
+
+    shown = [h for h in hive_rows if (h['apiary'], h['plan_path']) in active_keys or
+             (not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done)]
     day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     overlays, start_tile = dashboard_overlays.build(conn, d["usage"], agents_all, shown, bees, apiaries, day, [str(p.get("name")) for p in cfg.get("providers") or [] if p.get("name")])
     return {"now": now, "project": project, "run_state": d["run"]["state"], "orchestrator": orchestrator, "version": _version(),
             "tiles": {"apiaries": len(apiaries), "hives": sum(1 for h in hive_rows if h["live"] and not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done), "queens": len(queens), "orchestrators": len(orch_table), "bees": len(queens) + sum(1 for b in bees if b["kind"] in ("bee", "fix") and b["status"] in ("running", "stopping")),
                       "bee_capacity": slots, "tokens_in": sum(t[0] for t in today), "tokens_out": sum(t[1] for t in today), "start_ctx": start_tile},
             "overlays": overlays,
-            "hives": [h for h in hive_rows if not h["plan_rejected"] and (h["apiary"], h["plan_path"]) not in plan_done], "bees": bees, "apiaries": apiaries,
+            "hives": shown, "bees": bees, "apiaries": apiaries,
             "projects": [r["name"] for r in conn.execute("SELECT name FROM projects ORDER BY priority DESC, name")],
             "log": [log_line(e, who) for e in reversed(events)], "log_ids": [e["id"] for e in reversed(events)], "log_meta": [log_meta(e, plan_of) for e in reversed(events)], "activity": activity_rows(agents_all, now),
             "system": sysinfo if sysinfo is not None else system_info(d["sysinfo"]), "queue": queue_panel(conn, project),

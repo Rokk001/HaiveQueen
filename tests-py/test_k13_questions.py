@@ -42,12 +42,14 @@ class ObsoleteQuestionsTest(RoundCase):
         loop.close_obsolete_questions(conn)
         self.assertEqual(conn.execute('SELECT status FROM questions WHERE id=?', (qid,)).fetchone()[0], 'answered')
 
-    def test_inbox_answers_other_project_by_id(self):
+    def test_inbox_rejects_answer_to_other_project_by_id(self):
         qid = db.add_question(self.conn, 'other', 'other-plan', 'P1', 'Question?', '')
         folder = inbox.inbox_dir(self.repo)
         folder.mkdir(parents=True)
         (folder / 'answer.toml').write_text('[[answer]]\nquestion_id = %d\ntext = "yes"\nby = "owner"\n' % qid, encoding='utf-8')
         self.round()
-        question = runtime.list_questions(self.conn, 'other', status='answered')[0]
-        self.assertEqual((question['id'], question['answer']), (qid, 'yes'))
-        self.assertEqual(len(runtime.list_decisions(self.conn, 'other')), 1)
+        question = runtime.list_questions(self.conn, 'other', status='open')[0]
+        self.assertEqual(question['id'], qid)
+        self.assertFalse(question['answer'])
+        self.assertEqual(runtime.list_questions(self.conn, 'other', status='answered'), [])
+        self.assertEqual(runtime.list_decisions(self.conn, 'other'), [])

@@ -1,3 +1,4 @@
+require('./dashboard_loading_test.cjs');
 const assert = require('node:assert/strict');
 const {hiveCounts,isPackagePlaceholder}=require('../haivequeen/web-client.js');
 const hiveExample=[{kind:'queen',name:'Queen'},{kind:'bee',name:'–',agent:null,status:'waiting'},
@@ -115,6 +116,7 @@ async function providerThresholdUI(legacy=false) {
     get lastChild() { return this.children.at(-1); }
     querySelectorAll(selector) {
       const all=[]; const walk=node=>{for(const child of node.children){all.push(child);walk(child);}}; walk(this);
+      if(selector==='input,select,textarea')return all.filter(node=>['INPUT','SELECT','TEXTAREA'].includes(node.tagName));
       if(selector==='h2'||selector==='details')return all.filter(node=>node.tagName===selector.toUpperCase());
       if(selector==='[data-tab]')return all.filter(node=>node.dataset.tab);
       if(selector==='[data-tab="Questions"]')return all.filter(node=>node.dataset.tab==='Questions');
@@ -124,7 +126,10 @@ async function providerThresholdUI(legacy=false) {
       if(selector==='.capability-threshold input[type="number"]')return all.filter(node=>node.tagName==='INPUT' && node.type==='number' && node.parentNode?.className==='capability-threshold');
       return [];
     }
-    reportValidity() { const n=Number(this.value); return this.value.trim()!=='' && Number.isInteger(n) && n>=Number(this.min) && n<=Number(this.max); }
+    get parentElement(){return this.parentNode;}
+    closest(selector){for(let node=this;node;node=node.parentNode)if(selector.startsWith('.')&&(node.className||'').split(' ').includes(selector.slice(1)))return node;return null;}
+    checkValidity() { if(this.type!=='number')return true;const n=Number(this.value);return (!this.required||this.value.trim()!=='') && (this.value===''||Number.isFinite(n)&&(!this.min||n>=Number(this.min))&&(!this.max||n<=Number(this.max))&&(this.step!=='1'||Number.isInteger(n))); }
+    reportValidity() { return this.checkValidity(); }
   }
   const descendantsFor=node=>node.children.flatMap(child=>[child,...descendantsFor(child)]);
   const ids={}; for(const id of ['app','tabs','notice','detail','detail-body','close-detail','version','controls','live','dirty-marker','update-status'])ids[id]=new Element('div');
@@ -237,4 +242,3 @@ assert.equal(metricRows.length,7);
  assert.equal(orchestrationFor({...row,kind:'bee'},hives),null);
  assert.equal(orchestrationFor({...row,project:'missing'},hives),null);
 }
-

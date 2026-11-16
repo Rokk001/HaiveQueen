@@ -30,6 +30,14 @@ class OrchCase(RoundCase):
     def setUp(self):
         super().setUp()
         self.addCleanup(setattr, orchestrator, "ASYNC", None)
+        # Pipeline tests use a completed reviewer; asynchronous review has its own tests.
+        def reviewed(conn, env, plan):
+            info = orchestrator.last_info(conn, env.name, plan)
+            reports = ["Report of fix agent: " + path.read_text(encoding="utf-8") for path in env.run_dir("").glob("*/final.txt")]
+            return "Plan acceptance\n" + str(info.get("commit", "")) + "\n" + ", ".join(info.get("steps", [])) + "\n" + "\n".join(reports)
+        reviewer = mock.patch("haivequeen.acceptance.prepare", side_effect=reviewed)
+        reviewer.start()
+        self.addCleanup(reviewer.stop)
         self.remote = self.base / "remote.git"
         sh("git", "init", "-q", "--bare", "-b", "main", str(self.remote))
         self.git("init", "-q", "-b", "main")
@@ -114,7 +122,16 @@ class OrchCase(RoundCase):
     def state(self, rel=REL):
         return orchestrator.load(self.conn, "testproj", rel)
 
-    def end_fixer(self, agent, report="fixed it"):
+    def end_fixer(self, agent, report="fixed it", verification=True, verification_command=None):
+        if verification:
+            env = self.env()
+            state = self.state(agent['plan_path'])
+            fix = (state or {}).get('fix') or {}
+            command = verification_command or orchestrator.commands(env).get(fix.get('step')) or 'git diff --check HEAD^ HEAD'
+            evidence = {'command': command, 'reason': 'Exercise the original fixture failure.',
+                        'commit': integration.head_commit(agent['cwd']),
+                        'failure_log': fix.get('log_file', '')}
+            (env.run_dir(agent['name']) / 'repair-verification.json').write_text(json.dumps(evidence), encoding='utf-8')
         self.finish(agent["name"], final=report)
         runtime.upsert_agent(self.conn, "testproj", agent["name"], {"pid": None})
 
@@ -280,18 +297,20 @@ class FixAgent(OrchCase):
         prompt = (self.env().run_dir(self.fixers()[1]["name"]) / "prompt.md").read_text(encoding="utf-8")
         self.assertIn("Try again, add fixed.txt", prompt)
 
-    def test_failed_fix_attempts_escalate_up_to_one_owner_question(self):
-        self.settings = {"escalateAfter": 1}
+    def test_failed_fix_attempts_require_diagnosis_before_stronger_model(self):
+        self.settings = {"escalateAfter": 1, "diagnosisClass": "light"}
         self.machine.update(self.settings)
         self.ready_plan()
-        for _ in range(8):
+        for _ in range(2):
             self.round()
             for agent in self.fixers():
                 if agent["status"] in ("running", "starting"):
                     self.end_fixer(agent)
-        self.assertEqual([a["class"] for a in self.fixers()], ["medium", "heavy"])   # then no higher class is offered: the owner is asked once
-        self.assertEqual(len(self.question("fix-escalation")), 1)
-        self.assertEqual(self.plan_status(), "WAITING")
+        self.round()
+        self.assertEqual([a["class"] for a in self.fixers()][:2], ["heavy", "light"])
+        self.assertTrue(self.state()['fix']['diagnosis'])
+        self.assertEqual(len(self.question("fix-escalation")), 0)
+        self.assertEqual(self.plan_status(), "RUNNING")
 
     def test_waiting_plan_does_not_block_another_plan(self):
         second = self.make_worktree("other-br", "otherwt")
@@ -346,6 +365,10 @@ class WaitingAndRam(OrchCase):
 
 
 class OwnerCheckFix(OrchCase):
+    def test_owner_fix_completed_in_same_second_reaches_review(self):
+        with mock.patch.object(db, 'now', return_value=db.now()):
+            self.test_rejection_starts_a_fix_agent_and_the_whole_pipeline_again()
+
     def test_rejection_starts_a_fix_agent_and_the_whole_pipeline_again(self):
         self.check = self.echo("Check")
         self.project_toml()
@@ -404,13 +427,20 @@ class AsyncCommands(OrchCase):
 
     def test_pause_lets_the_command_end_then_halts_and_the_resume_goes_on(self):
         orchestrator.ASYNC = True
-        self.check = self.sleeper(1) + " && " + self.echo("Check")
+        release = self.base / 'release-check'
+        script = self.base / 'pause-check.py'
+        script.write_text("from pathlib import Path\nimport time,sys\ndeadline=time.monotonic()+20\n"
+                          "while not Path(sys.argv[1]).exists():\n"
+                          "    if time.monotonic()>deadline: sys.exit(98)\n"
+                          "    time.sleep(.01)\n", encoding='utf-8')
+        self.check = '"%s" "%s" "%s"' % (sys.executable, script, release) + " && " + self.echo("Check")
         self.build = self.echo("Build")
         self.project_toml()
         self.ready_plan()
         self.start_check()
         self.assertTrue(orchestrator.running_jobs())
         hives.pause_plan(self.conn, "testproj", REL)
+        release.touch()
         self.wait_job()
         self.round()
         self.assertEqual(self.run_order(), ["Check"])                   # the command ran to its end, the next step did not start
@@ -492,8 +522,14 @@ class AsyncCommands(OrchCase):
         settings = self.env().settings
         held = [integration._acquire_compile_slot(settings, 0.05) for _ in range(integration.compile_limit(settings))]
         try:
+            lock = integration._compile_lock_path()
+            previous = lock.stat().st_mtime_ns
             self.start_check()
-            time.sleep(1.5)
+            deadline = time.monotonic() + 10
+            while lock.stat().st_mtime_ns == previous:
+                self.assertLess(time.monotonic(), deadline, 'supervisor did not examine occupied slots')
+                threading.Event().wait(.01)
+            self.assertEqual(len(integration._compile_holders()), len(held))
             self.assertEqual(self.run_order(), [])
         finally:
             for slot in held:

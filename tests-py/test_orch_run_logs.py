@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from bzztest import REL, RoundCase
@@ -50,7 +51,7 @@ class RunLogs(OrchCase):
         self.end_fixer(self.fixers()[0])
         merge = orchestrator._merge_git
         def observed(*args):
-            running = [p for p in self.logs() if records(p)[-1]["event"] == "start"]
+            running = [p for p in self.logs() if not any(r['event'] == 'end' for r in records(p))]
             self.assertEqual(len(running), 1)
             start = records(running[0])[0]
             self.assertEqual(start["result"], "running")
@@ -60,9 +61,9 @@ class RunLogs(OrchCase):
         with mock.patch.object(orchestrator, "_merge_git", side_effect=observed):
             self.round()
         logs = self.logs()
-        self.assertEqual(len(logs), 8)
+        self.assertEqual(len(logs), 9)
         self.assertEqual(sorted(records(p)[0]["step"] for p in logs),
-                         sorted(["Merge", "Check", "Merge", "Check", "Build", "Push", "Deploy", "Close"]))
+                         sorted(["Merge", "Check", "RepairCheck", "Merge", "Check", "Build", "Push", "Deploy", "Close"]))
         for p in logs:
             data = records(p)
             self.assertTrue(data[0]["started_at"])
@@ -70,7 +71,7 @@ class RunLogs(OrchCase):
             self.assertEqual(data[-1]["event"], "end")
             self.assertTrue(data[-1]["ended_at"])
             self.assertIn(data[-1]["result"], ("succeeded", "failed"))
-            if data[0]["step"] in ("Check", "Build", "Deploy"):
+            if data[0]["step"] in ("Check", "Build", "Deploy", "RepairCheck"):
                 self.assertEqual(len(output(p).splitlines()), 550)
         for p, before in snapshots.items():
             self.assertEqual(p.read_bytes(), before)
@@ -100,7 +101,20 @@ class OutputLogs(RoundCase):
         for expected, stall, maximum in ((124, 60, 2), (125, 2, 60)):
             with self.subTest(exit=expected):
                 path = action_logs.start("testproj", REL, "Check")
-                with mock.patch.object(integration.proctree, "tree_cpu_seconds", return_value=0):
+                # Exercise timeout output retention, not Python/shell startup speed.
+                # Start the short deadline only after the fixture output is drained.
+                real_started = time.monotonic()
+                drained_at = None
+                def clock():
+                    nonlocal drained_at
+                    now = time.monotonic()
+                    if drained_at is None and "line-0549 " in output(Path(path)):
+                        drained_at = now
+                    if drained_at is not None:
+                        return now - drained_at
+                    return 0 if now - real_started < 15 else now - real_started
+                with mock.patch.object(integration.proctree, "tree_cpu_seconds", return_value=0), \
+                     mock.patch.object(integration, "time", SimpleNamespace(monotonic=clock, sleep=time.sleep)):
                     code, text = integration._watch_compile(command, str(self.base), stall, maximum, .02, log_file=path)
                 self.assertEqual(code, expected)
                 self.assertIn("line-0000 " + "x"*200, text)

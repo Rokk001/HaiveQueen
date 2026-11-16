@@ -162,20 +162,22 @@ class StallTest(RunnerBase):
     """A hanging agent (alive but silent) is ended after the stall limit."""
 
     def test_silent_agent_is_marked_but_not_ended(self):
-        """The fake CLI prints its stream and then stays silent for 10 s: with a 2 s limit the row gets the stalled mark while it still runs
+        """The fake CLI prints its stream and then waits for explicit release: with a 2 s limit the row gets the stalled mark while it still runs
         (the overview data and status show it, one event is logged); nothing is ended, the agent finishes as done and the mark is gone."""
         self.write_config('agentStallSeconds = 2')
         self.prepare("S-1")
         self.conn.execute("INSERT INTO packages (project, plan_path, id, title) VALUES ('demo', 'plans/Demo-PLAN.md', 'P1', 'first')")
         result = {}
-        worker = threading.Thread(target=lambda: result.update(r=self.run_runner("S-1", "claude", claude_stream(), env={"FAKE_HANG": "10"})))
+        release = Path(self.tmp.name) / "release-stalled-agent"
+        worker = threading.Thread(target=lambda: result.update(r=self.run_runner("S-1", "claude", claude_stream(), env={"FAKE_RELEASE": str(release)})))
         worker.start()
         marked = None
         end = time.monotonic() + 40
         while time.monotonic() < end and marked is None:
             row = self.row("S-1")
             marked = row if row and row.get("stalledAt") else None
-            time.sleep(0.3)
+            if marked is None:
+                time.sleep(0.02)
         try:
             self.assertIsNotNone(marked, "the silent agent was never marked as stalled")
             self.assertEqual(marked["status"], "running", "a stalled agent keeps running")
@@ -188,6 +190,7 @@ class StallTest(RunnerBase):
                 orch.cmd_status(argparse.Namespace(project="demo", json=False), self.conn)
             self.assertIn("WARNING: 1 agent(s) stalled", buf.getvalue())
         finally:
+            release.touch()
             worker.join(120)
         self.assertEqual(result["r"].returncode, 0, result["r"].stderr)
         row = self.row("S-1")

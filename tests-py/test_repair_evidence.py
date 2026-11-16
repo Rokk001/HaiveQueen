@@ -1,0 +1,357 @@
+"""Repair decisions require evidence rather than an agent merely ending."""
+import os
+import json
+import sys
+import time
+from unittest import mock
+from bzztest import REL
+from haivequeen import action_logs, db, integration, loop, orchestrator
+from test_o1_orchestrator import OrchCase
+
+
+class RepairEvidence(OrchCase):
+    def setUp(self):
+        super().setUp()
+        self.check = 'echo original-failure && exit 7'
+        self.project_toml()
+        self.ready_plan()
+
+    def test_no_change_does_not_repeat_the_failed_pipeline(self):
+        self.round()
+        first = self.fixers()[0]
+        log = action_logs.latest('testproj', REL, 'Check')['path']
+        self.end_fixer(first, 'No repair was made; inspect the shared fixture next.')
+        self.round()
+        self.assertEqual(action_logs.latest('testproj', REL, 'Check')['path'], log)
+        self.assertEqual(self.state()['phase'], 'fix')
+        self.round()
+        prompt = (self.env().run_dir(self.fixers()[-1]['name']) / 'prompt.md').read_text(encoding='utf-8')
+        self.assertIn('No repair was made; inspect the shared fixture next.', prompt)
+        self.assertIn(log, prompt)
+
+    def test_used_authorization_cannot_bypass_new_diagnosis(self):
+        self.round()
+        state = self.state()
+        state['fix']['review_authorized'] = orchestrator._review_scope(self.conn, self.env(), REL, state['fix'])
+        state['fix']['review_class'] = 'medium'
+        orchestrator.save(self.conn, 'testproj', REL, state)
+        self.end_fixer(self.fixers()[0], 'No progress; the same resource is still occupied.', verification=False)
+        self.round()
+        self.round()
+        self.assertTrue(self.state()['fix']['diagnosis'])
+        self.assertNotIn('review_authorized', self.state()['fix'])
+
+    def test_empty_commit_is_not_repair_evidence(self):
+        self.round()
+        log = action_logs.latest('testproj', REL, 'Check')['path']
+        self.git('commit', '--allow-empty', '-qm', 'empty attempt', cwd=self.pwt)
+        self.end_fixer(self.fixers()[0])
+        self.round()
+        self.assertEqual(action_logs.latest('testproj', REL, 'Check')['path'], log)
+
+    def test_run_records_tested_commit_and_command(self):
+        self.round()
+        records = action_logs.read(action_logs.latest('testproj', REL, 'Check')['path'])
+        evidence = next(r for r in records if r['event'] == 'execution')
+        self.assertEqual(evidence['commit'], self.git('rev-parse', 'HEAD', cwd=self.pwt))
+        self.assertEqual(evidence['command'], self.check)
+        self.assertEqual(next(r for r in records if r['event'] == 'end')['exit_code'], 7)
+
+    def test_cancelled_worker_is_not_reported_as_project_failure(self):
+        path = action_logs.start('testproj', REL, 'Build')
+        job = orchestrator.Job('test-job')
+        job.log_file = path
+        job.cancelled = True
+        orchestrator._work({}, job, 'Build', 'unused', self.pwt, None, self.base / 'result.json')
+        end = action_logs.read(path)[-1]
+        self.assertEqual(end['result'], 'cancelled')
+
+    def test_second_failure_keeps_history_until_full_pipeline_passes(self):
+        self.check = 'git ls-files --error-unmatch first-fix.txt'
+        self.build = 'git ls-files --error-unmatch second-fix.txt'
+        self.project_toml()
+        self.round()
+        first = self.fixers()[0]
+        self.commit(self.pwt, 'first-fix.txt')
+        self.end_fixer(first, 'First failure repaired and targeted check passed.')
+        self.round()
+        history = orchestrator.repair_history(self.conn, 'testproj', REL)
+        self.assertFalse(any(x['event'] == 'verified' for x in history))
+        self.assertEqual([x['step'] for x in history if x['event'] == 'failure'], ['Check', 'Build'])
+        second = self.fixers()[-1]
+        prompt = (self.env().run_dir(second['name']) / 'prompt.md').read_text(encoding='utf-8')
+        self.assertIn('First failure repaired and targeted check passed.', prompt)
+        self.commit(self.pwt, 'second-fix.txt')
+        self.end_fixer(second, 'Second failure repaired.')
+        self.round()
+        history = orchestrator.repair_history(self.conn, 'testproj', REL)
+        verified = [x for x in history if x['event'] == 'verified']
+        self.assertEqual(len(verified), 1)
+        self.assertEqual(verified[0]['commit'], self.remote_head())
+        self.assertIn('Check', verified[0]['steps'])
+        self.assertIn('Build', verified[0]['steps'])
+
+    def test_verified_step_does_not_exhaust_budget_for_next_failure(self):
+        self.machine.update({'queenClass': 'heavy', 'escalateAfter': 1})
+        self.check = 'git ls-files --error-unmatch first-fix.txt'
+        self.build = 'git ls-files --error-unmatch second-fix.txt'
+        self.project_toml()
+        self.round()
+        first = self.fixers()[0]
+        self.commit(self.pwt, 'first-fix.txt')
+        self.end_fixer(first, 'The original check is repaired.')
+        self.round()
+        self.assertEqual(len(self.fixers()), 2)
+        self.assertFalse(self.question('fix-escalation'))
+        self.assertEqual(self.state()['fix']['step'], 'Build')
+        history = orchestrator.repair_history(self.conn, 'testproj', REL)
+        self.assertEqual(len([e for e in history if e['event'] == 'attempt-started']), 2)
+        self.assertFalse(any(e['event'] == 'verified' for e in history))
+
+    def test_targeted_pass_does_not_reset_budget_when_original_check_still_fails(self):
+        self.machine.update({'queenClass': 'heavy', 'escalateAfter': 1})
+        self.round()
+        self.commit(self.pwt, 'unrelated.txt')
+        self.end_fixer(self.fixers()[0], verification_command='git ls-files --error-unmatch unrelated.txt')
+        self.round()
+        self.assertTrue(self.state()['fix']['diagnosis'])
+        history = orchestrator.repair_history(self.conn, 'testproj', REL)
+        self.assertEqual(len([e for e in history if e['event'] == 'attempt-started']), 1)
+        self.assertFalse(any(e['event'] == 'repaired-step-passed' for e in history))
+        self.assertEqual(orchestrator._attempts(self.conn, self.env(), REL)['n'], 1)
+
+
+class TargetedVerificationFixture(OrchCase):
+    """Prepare a committed repair with its original failed integration log."""
+    def setUp(self):
+        self.check = 'git ls-files --error-unmatch repaired.txt'
+        super().setUp()
+        self.ready_plan()
+        self.round()
+        self.agent = self.fixers()[0]
+        self.failure_log = self.state()['fix']['log_file']
+        self.check_log = action_logs.latest('testproj', REL, 'Check')['path']
+        self.commit(self.pwt, 'repaired.txt')
+
+    def end_with_evidence(self, command, commit=None):
+        self.end_fixer(self.agent)
+        evidence = {'command': command,
+                    'commit': commit or self.git('rev-parse', 'HEAD', cwd=self.pwt),
+                    'failure_log': self.failure_log,
+                    'reason': 'Verify the tracked repair for the original missing-file failure.'}
+        (self.env().run_dir(self.agent['name']) / 'repair-verification.json').write_text(
+            json.dumps(evidence), encoding='utf-8')
+
+
+class TargetedVerification(TargetedVerificationFixture):
+    """Targeted checks must pass before the complete pipeline can restart."""
+
+    def test_verification_prompt_identifies_host_shell(self):
+        prompt = (self.env().run_dir(self.agent['name']) / 'prompt.md').read_text(encoding='utf-8')
+        self.assertIn('cmd.exe' if os.name == 'nt' else '/bin/sh', prompt)
+        if os.name == 'nt':
+            self.assertIn('double quotes', prompt)
+
+    def test_missing_verification_does_not_restart_pipeline(self):
+        self.end_fixer(self.agent, verification=False)
+        self.round()
+        self.assertEqual(action_logs.latest('testproj', REL, 'Check')['path'], self.check_log)
+        self.assertEqual(self.state()['phase'], 'fix')
+
+    def test_verification_and_diagnosis_use_unique_agent_run_directories(self):
+        first = self.env().run_dir(self.agent['name'])
+        self.assertIn(str(first / 'repair-verification.json'),
+                      (first / 'prompt.md').read_text(encoding='utf-8'))
+        self.end_fixer(self.agent, verification=False)
+        with mock.patch.object(loop, 'agent_identity', return_value={'Person': self.agent['name'], 'Color': 'FFFFFF'}):
+            self.round()
+        agent = self.fixers()[-1]
+        self.assertNotEqual(agent['name'], self.agent['name'])
+        folder = self.env().run_dir(agent['name'])
+        prompt = (folder / 'prompt.md').read_text(encoding='utf-8')
+        self.assertTrue(self.state()['fix']['diagnosis'])
+        self.assertIn(str(folder / 'repair-diagnosis.json'), prompt)
+
+    def test_failed_targeted_verification_returns_to_diagnosis(self):
+        self.end_with_evidence('echo targeted-regression-failed && exit 9')
+        self.round()
+        self.assertEqual(action_logs.latest('testproj', REL, 'Check')['path'], self.check_log)
+        history = orchestrator.repair_history(self.conn, 'testproj', REL)
+        result = next(x for x in history if x['event'] == 'targeted-verification')
+        self.assertEqual(result['exit_code'], 9)
+        self.assertIn('targeted-regression-failed', action_logs.output(result['log_file']))
+
+    def test_stale_commit_evidence_is_not_executed(self):
+        marker = self.base / 'must-not-run.txt'
+        self.end_with_evidence('echo unexpected > "' + str(marker) + '"', commit='0' * 40)
+        self.round()
+        self.assertFalse(marker.exists())
+        self.assertEqual(action_logs.latest('testproj', REL, 'Check')['path'], self.check_log)
+
+    def test_successful_targeted_check_precedes_full_integration(self):
+        self.end_with_evidence(self.check)
+        self.round()
+        history = orchestrator.repair_history(self.conn, 'testproj', REL)
+        events = [x['event'] for x in history]
+        self.assertIn('targeted-verification', events)
+        self.assertLess(events.index('targeted-verification'), events.index('pipeline-retry'))
+        self.assertLess(events.index('pipeline-retry'), events.index('verified'))
+        self.assertEqual(self.plan_status(), 'REVIEW')
+
+    def test_verification_survives_observer_restart_without_duplicate_command(self):
+        self.end_with_evidence(self.check)
+        orchestrator.ASYNC = True
+        with mock.patch.object(integration, 'poll_compile_check', return_value=None):
+            self.round()
+        job = self.state()['job']
+        self.assertEqual(job['step'], 'RepairCheck')
+        orchestrator.JOBS.pop(('testproj', REL), None)
+        deadline = time.monotonic() + 30
+        while integration.poll_compile_check(self.conn, 'testproj', job) is None:
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(.1)
+        orchestrator.ASYNC = False
+        # Prevent the next normal pipeline stage from starting: only recover the
+        # existing targeted result after losing the observer's in-memory Job.
+        with mock.patch.object(orchestrator, '_advance_pipeline'), mock.patch.object(
+                integration, 'start_compile_check') as start:
+            self.round()
+        start.assert_not_called()
+        self.assertEqual(self.state()['phase'], 'pipeline')
+        results = [x for x in orchestrator.repair_history(self.conn, 'testproj', REL)
+                   if x['event'] == 'targeted-verification']
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['exit_code'], 0)
+
+    def test_verification_access_failure_waits_for_user_instead_of_repair_loop(self):
+        command = ('"%s" -c "import pathlib,sys; print(\'fatal: Authentication failed\'); '
+                   'sys.exit(0 if pathlib.Path(\'access-granted.txt\').exists() else 128)"') % sys.executable
+        self.end_with_evidence(command)
+        self.round()
+        self.assertEqual(self.state()['phase'], 'blocked')
+        questions = self.question('integration-access-repaircheck')
+        self.assertEqual(len(questions), 1)
+        self.round()
+        self.assertEqual(len(self.fixers()), 1)
+        (self.pwt / 'access-granted.txt').write_text('external credential corrected', encoding='utf-8')
+        db.answer_question(self.conn, questions[0]['id'], 'Access corrected; retry.', 'owner')
+        self.round()
+        self.assertEqual(self.plan_status(), 'REVIEW')
+
+
+class VerificationCommandRetry(TargetedVerificationFixture):
+    """A corrected command can verify the same committed repair without a dummy commit."""
+
+    def prepare_retry(self, command=None, **previous):
+        """Keep a failed check in durable history and end an unchanged repair attempt."""
+        state = self.state()
+        state['fix']['agent'] = self.agent['name']
+        state['fix'].pop('diagnosis', None)
+        state['fix']['head'] = self.git('rev-parse', 'HEAD', cwd=self.pwt)
+        orchestrator.save(self.conn, 'testproj', REL, state)
+        orchestrator._record_repair(self.conn, 'testproj', REL, 'targeted-verification',
+            **dict({'commit': state['fix']['head'], 'failure_log': self.failure_log,
+                    'command': 'echo failed && exit 9', 'exit_code': 9}, **previous))
+        self.end_with_evidence(command or self.check)
+        return self.state()
+
+    def advance(self, state):
+        """Exercise just the repair gate, leaving the normal pipeline to its own tests."""
+        return orchestrator._advance_fix(self.conn, self.env(), REL, state, 100000, lambda pid: False)
+
+    def test_changed_command_runs_at_same_commit(self):
+        """A durable failed command permits a valid replacement and real RepairCheck."""
+        state = self.prepare_retry()
+        self.advance(state)
+        results = [e for e in orchestrator.repair_history(self.conn, 'testproj', REL)
+                   if e['event'] == 'targeted-verification']
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[-1]['exit_code'], 0)
+        self.assertEqual(results[-1]['commit'], results[0]['commit'])
+        self.assertEqual(results[-1]['failure_log'], self.failure_log)
+        self.assertEqual(state['phase'], 'pipeline')
+        self.assertEqual(action_logs.latest('testproj', REL, 'Check')['path'], self.check_log)
+
+    def test_same_failed_command_is_rejected(self):
+        """Whitespace cannot disguise an already failed command on the same repair."""
+        state = self.prepare_retry('  echo failed && exit 9  ')
+        with mock.patch.object(orchestrator, '_verify_repair') as verify:
+            self.advance(state)
+        verify.assert_not_called()
+        self.assertIn('already failed', state['fix']['instruction'])
+
+    def test_failed_command_cannot_be_reused_after_another_failure(self):
+        """All failed commands in the scope remain excluded, not just the latest."""
+        state = self.prepare_retry('echo failed && exit 9')
+        orchestrator._record_repair(self.conn, 'testproj', REL, 'targeted-verification',
+            commit=state['fix']['head'], failure_log=self.failure_log,
+            command='echo second && exit 8', exit_code=8)
+        with mock.patch.object(orchestrator, '_verify_repair') as verify:
+            self.advance(state)
+        verify.assert_not_called()
+
+    def test_other_commit_or_failure_or_success_does_not_authorize_retry(self):
+        """Only a failed RepairCheck for this HEAD and original failure opens the gate."""
+        for previous in ({'commit': '0' * 40}, {'failure_log': 'other-log'}, {'exit_code': 0}):
+            with self.subTest(previous=previous):
+                runtime = orchestrator.runtime
+                runtime.kv_set(self.conn, 'testproj', 'orch-repair-history:' + REL, '[]')
+                state = self.prepare_retry(**previous)
+                with mock.patch.object(orchestrator, '_verify_repair') as verify:
+                    self.advance(state)
+                verify.assert_not_called()
+
+    def test_dirty_tree_does_not_authorize_command_retry(self):
+        """Tracked and untracked changes both prevent an unchanged-commit retry."""
+        for filename in ('repaired.txt', 'untracked.txt'):
+            with self.subTest(filename=filename):
+                state = self.prepare_retry()
+                path = self.pwt / filename
+                original = path.read_text() if path.exists() else None
+                path.write_text('dirty', encoding='utf-8')
+                with mock.patch.object(orchestrator, '_verify_repair') as verify:
+                    self.advance(state)
+                verify.assert_not_called()
+                if original is None:
+                    path.unlink()
+                else:
+                    path.write_text(original, encoding='utf-8')
+
+    def test_invalid_replacement_keeps_validation(self):
+        """Command retries retain commit, failure, reason, command and size validation."""
+        for field, value in (('commit', '0' * 40), ('failure_log', 'other-log'),
+                             ('reason', ''), ('command', ''), ('reason', 'x' * 65536)):
+            with self.subTest(field=field, value=value[:40]):
+                state = self.prepare_retry()
+                path = self.env().run_dir(self.agent['name']) / 'repair-verification.json'
+                evidence = json.loads(path.read_text(encoding='utf-8'))
+                evidence[field] = value
+                path.write_text(json.dumps(evidence), encoding='utf-8')
+                with mock.patch.object(orchestrator, '_verify_repair') as verify:
+                    self.advance(state)
+                verify.assert_not_called()
+                self.assertIn('invalid repair verification', state['fix']['instruction'])
+
+
+class MergeAncestryEvidence(OrchCase):
+    def test_resolved_merge_with_unchanged_tree_is_verified(self):
+        self.commit(self.repo, 'comment.txt', 'base comment\n')
+        self.git('push', '-q', 'origin', 'main')
+        self.git('merge', '--ff-only', 'main', cwd=self.pwt)
+        self.ready_plan()
+        self.commit(self.pwt, 'comment.txt', 'local comment\n')
+        self.remote_commit('comment.txt', 'upstream comment\n')
+        self.check = 'git ls-files --error-unmatch comment.txt'
+        self.project_toml()
+        self.round()
+        self.assertEqual(self.state()['fix']['step'], 'Merge')
+        before = self.git('rev-parse', 'HEAD', cwd=self.pwt)
+        self.git('checkout', '--ours', '--', 'comment.txt', cwd=self.pwt)
+        self.git('add', '--', 'comment.txt', cwd=self.pwt)
+        self.git('commit', '-qm', 'Resolve comment conflict', cwd=self.pwt)
+        self.assertEqual(self.git('diff', before, 'HEAD', cwd=self.pwt), '')
+        self.end_fixer(self.fixers()[-1], verification_command=self.check)
+        self.round()
+        self.assertEqual(self.plan_status(), 'REVIEW')
+        history = orchestrator.repair_history(self.conn, 'testproj', REL)
+        self.assertTrue(any(e['event'] == 'verified' for e in history))

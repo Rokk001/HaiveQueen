@@ -165,21 +165,23 @@ def cmd_compile_check(args, conn) -> int:
 def cmd_ask(args, conn) -> int:
     """File a question for the owner."""
     from haivequeen import triage
-    open_questions = runtime.list_questions(conn, args.project, status="open", plan=args.plan, item=args.item)
+    open_questions = [q for q in runtime.list_questions(conn, args.project, plan=args.plan, item=args.item)
+                      if q["status"] in ("open", "triage")]
     if open_questions:
         qid = open_questions[-1]["id"]
         with db.transaction(conn):
-            conn.execute("UPDATE questions SET question=question || ? WHERE id=? AND status='open'", ("\n\n" + args.question, qid))
+            conn.execute("UPDATE questions SET question=question || ? WHERE id=? AND status IN ('open','triage')", ("\n\n" + args.question, qid))
             db.add_event(conn, args.project, "note", "Additional text for question %d: %s" % (qid, args.question), data={"question_id": qid})
-        out({"ok": True, "id": qid, "status": "open"})
+        out({"ok": True, "id": qid, "status": open_questions[-1]["status"]})
         return 0
     known = triage._known_answer(conn, args.project, args.plan, args.item)
     if known:
         qid = db.add_question(conn, args.project, args.plan, args.item, args.question, args.recommendation, status="triage")
         out(triage._close_with_reference(conn, qid, *known))
     else:
-        qid = db.add_question(conn, args.project, args.plan, args.item, args.question, args.recommendation)
-        out({"ok": True, "id": qid, "status": "open"})
+        status = "open" if triage.owner_check(args.item) else "triage"
+        qid = db.add_question(conn, args.project, args.plan, args.item, args.question, args.recommendation, status=status)
+        out({"ok": True, "id": qid, "status": status})
     return 0
 
 
@@ -375,7 +377,7 @@ def cmd_requeen(args, conn):
         env = next(e for e in scheduler.load_projects(conn, machine) if e.name == row['project'])
         with loop.hive_schedule_lock():
             hives.requeen(conn, row['project'], row['plan_path'], provider=args.provider, providers=env.providers,
-                          queen_class=env.settings.get('queenClass', 'medium'), excluded=machine.get('excludedProviders', []))
+                          queen_class=env.settings.get('queenClass', 'heavy'), excluded=machine.get('excludedProviders', []))
             hives.schedule_round(conn, machine, [env], plan_files=[row['plan_path']])
     except (ValueError, StopIteration) as exc:
         return fail(str(exc) or 'Project not found')
@@ -412,6 +414,9 @@ def cmd_plan(args, conn):
     path = runtime._workspace(conn, args.project) / plan
     if not path.is_file():
         return fail("plan file not found: %s" % plan)
+    conflicts = runtime.list_questions(conn, args.project, status='open', plan=plan, item='plan-flow')
+    if conflicts:
+        return fail('plan flow conflict requires owner correction or explicit permission to ignore the conflicting instruction (question %s)' % conflicts[0]['id'])
     parsed = plan_mod.load_plan(str(path))
     problems = plan_mod.check_plan(parsed, {c for p in env.providers if p.get("enabled", True) for c in p.get("capabilities", [])}, plan_mod.load_requirements(str(path)), main_checkout=env.code_repo)
     if problems:
@@ -423,9 +428,12 @@ def cmd_plan(args, conn):
     runtime.sync_plans(conn, args.project)
     from haivequeen import bees
     default = bees.cut_default(env, plan)
-    handoff = parsed.branch != default[0] or not plan_mod.same_folder(parsed.worktree, default[1])   # the cut Queen started in the default worktree
+    current_folder = queen.get('cwd') or default[1]
+    handoff = not plan_mod.same_folder(parsed.worktree, current_folder)
     result = {"ok": True, "plan": plan, "status": status, "packages": [p.id for p in parsed.packages], "warnings": plan_mod.plan_warnings(parsed), "handoff": handoff}
     if handoff:
+        from haivequeen import hives
+        hives.context_limit(conn, args.project, plan)
         result["next"] = "the header names branch %s and worktree %s, not the worktree you run in: write your handoff and end now; the next Queen starts in the worktree of the header" % (parsed.branch, parsed.worktree)
     out(result)
     return 0
@@ -476,6 +484,13 @@ def cmd_bee(args, conn):
     from haivequeen import bees, scheduler
     if args.action in ("force-stop", "stop"):
         return cmd_agent_stop(args, conn)
+    if args.action == "history":
+        try:
+            out(bees.attempt_history(conn, args.project, args.plan, args.package,
+                                    before=args.before, limit=args.limit, attempt=args.attempt))
+            return 0
+        except ValueError as exc:
+            return fail(str(exc))
     missing = [f for f in ("plan", "package", "cls") if not getattr(args, f)]
     if missing:
         return fail("agent %s requires --plan, --package and --class" % args.action)
@@ -487,6 +502,13 @@ def cmd_bee(args, conn):
     if not env:
         return fail("unknown Project")
     plan = queen["plan_path"]
+    if args.action in ("handoff", "launched"):
+        try:
+            payload = bees.handoff(env, plan, args.package, queen, args.action == "launched")
+            out({"ok": True, **{k: v for k, v in payload.items() if k != "prompt"}})
+            return 0
+        except ValueError as exc:
+            return fail(str(exc))
     if args.action == "wait":
         provider = scheduler.get_provider(env.providers, args.provider)
         if not provider or provider['name'] in env.settings.get('excludedProviders', []):
@@ -536,7 +558,19 @@ def cmd_bee(args, conn):
         refused = bees.release_refusal(conn, args.project, plan, args.package, queen, getattr(args, "ended_evidence", "") or "", args.outcome)
         if refused:   # only trustworthy evidence ends a subagent Bee of an earlier Queen
             return fail(refused)
-        bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error, blocked, force_failure=bool(violation))
+        try:
+            bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error, blocked,
+                               force_failure=bool(violation), repair_result=getattr(args, 'repair_result', ''))
+        except (ValueError, OSError) as exc:
+            return fail(str(exc))
+        from haivequeen import package_diagnosis
+        review = package_diagnosis._load(conn, args.project, plan, args.package)
+        if review.get('phase') in ('pending', 'running', 'owner'):
+            out({'ok': True, 'outcome': 'failed' if violation else ('observed' if args.attempt in review.get('observations', {}) else args.outcome),
+                 'failures': bees.failure_count(conn, args.project, plan, args.package, args.cls),
+                 'nextAction': 'wait_for_owner' if review['phase'] == 'owner' else 'wait_for_diagnosis',
+                 **(branchguard.failure_fields(violation) if violation else {})})
+            return 0
         next_cls = bees.next_attempt(conn, args.project, plan, args.package, args.cls, bees.escalation_providers(env, plan, args.package),
                                      env.settings.get("excludedProviders", []), int(env.settings.get("escalateAfter", 3)))
         out({"ok": True, "failures": bees.failure_count(conn, args.project, plan, args.package, args.cls), "nextClass": next_cls, **({**branchguard.failure_fields(violation), "outcome": "failed"} if violation else {})})
@@ -554,7 +588,8 @@ def cmd_bee(args, conn):
         return fail(str(exc))
     if isinstance(started, dict):
         bees.set_package_state(conn, args.project, plan, args.package, 'working', agent)
-        out({"ok": True, "started": started.get("kind") == "process", **started})
+        out({"ok": True, "started": started.get("kind") == "process",
+             **{k: v for k, v in started.items() if k != "prompt" or not started.get("prompt_file")}})
         return 0
     if started:
         bees.set_package_state(conn, args.project, plan, args.package, 'working', agent)
@@ -599,7 +634,7 @@ def build_parser() -> argparse.ArgumentParser:
         "refuses a subagent of the Queen with the reason, and refuses the Queen, who can only be ended by bzz dequeen. "
         "The package stays stopped and waits for an explicit owner instruction. The Queen gets the stop as an owner message in owner_messages. "
         "'bzz agent stop' remains a compatibility alias for force-stop."))
-    p.add_argument("action", choices=["start", "result", "wait", "force-stop", "stop"])
+    p.add_argument("action", choices=["start", "handoff", "launched", "result", "history", "wait", "force-stop", "stop"])
     p.add_argument("target", nargs="?", default="", help="force-stop: the name of the one running Agent to end (owner only; not the Queen, not a subagent)")
     p.add_argument("--project", required=True)
     for field in ("plan", "package", "class"):   # required except for force-stop and its stop alias
@@ -611,8 +646,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--paths", default="[]")
     p.add_argument("--rules", default="[]")
     p.add_argument("--cwd", default="", help="legacy option; package worktree is chosen by HaiveQueen")
-    p.add_argument("--outcome", choices=["failed", "interrupted", "succeeded"])
-    p.add_argument("--attempt", default="")
+    p.add_argument("--outcome", choices=["failed", "interrupted", "succeeded", "progress"])
+    p.add_argument("--repair-result", default="", help="progress: JSON evidence for every assigned repair criterion")
+    p.add_argument("--attempt", default="", help="result: attempt identity; history: retrieve one complete stored attempt")
+    p.add_argument("--before", type=int, default=0, help="history: retrieve attempts before this sequence")
+    p.add_argument("--limit", type=int, default=5, help="history: page size, 1..20")
     p.add_argument("--open-requirements", default="[]")
     p.add_argument("--error", default="")
     p.add_argument("--blocked-by", choices=["question", "build", "owner", "package", "provider"], default="")

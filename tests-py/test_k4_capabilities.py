@@ -1,5 +1,6 @@
 """Provider capability migration and routing regressions."""
 import unittest
+from unittest import mock
 from haivequeen import bees, scheduler as sch
 
 
@@ -16,7 +17,8 @@ class CapabilityTests(unittest.TestCase):
         self.assertFalse(sch.capability_available([remote, external], ["Confidential data"]))
         self.assertIs(sch.select_provider([remote, local, external], "medium", ["Confidential data"], {"p": 1, "local": 1, "external": 1}), local)
 
-    def test_legacy_mapping_and_queen_defaults(self):
+    @mock.patch("haivequeen.mcp_setup.status", return_value={"available":["Image generation", "3D modelling"]})
+    def test_legacy_mapping_and_queen_defaults(self, _proof):
         p = sch.get_providers({"providers": [self.provider(use="capability-only", capabilities=["images", "blender", "build"])]})[0]
         self.assertEqual(p["capabilities"], ["Image generation", "3D modelling", "Build", "Queen"])
         self.assertEqual(p["use"], "preferred")

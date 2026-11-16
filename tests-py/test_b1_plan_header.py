@@ -262,7 +262,7 @@ class CutTests(GitCase):
 
     def queen(self):
         hives.create(self.conn, "testproj", REL, "claude", "123456")
-        self.agent("queen", phase="queen", status="running", provider="claude", pid=42)
+        self.agent("queen", phase="queen", status="running", provider="claude", pid=42, cwd=str(bees.cut_default(self.hq_env(), REL)[1]))
 
     def test_check_refuses_a_missing_field_and_the_plan_stays_sent(self):
         self.sent()
@@ -294,6 +294,30 @@ class CutTests(GitCase):
         code, output = self.check()
         self.assertEqual(code, 0, output)
         self.assertIn('"handoff": true', output)
+        self.assertEqual(hives.get(self.conn, 'testproj', REL)['state'], 'handoff')
+
+    def test_replacement_queen_already_in_header_worktree_keeps_running(self):
+        folder = self.base / 'wt-current'
+        self.sent(branch='fix/current', worktree=str(folder))
+        self.queen()
+        runtime.upsert_agent(self.conn, 'testproj', 'queen', {'cwd':str(folder)})
+        code, output = self.check()
+        self.assertEqual(code, 0, output)
+        self.assertIn('"handoff": false', output)
+
+    def test_open_flow_conflict_blocks_cut_until_owner_answer(self):
+        default = bees.cut_default(self.hq_env(), REL)
+        self.sent(branch=default[0], worktree=str(default[1]))
+        self.queen()
+        from haivequeen import db
+        qid = db.add_question(self.conn, 'testproj', REL, 'plan-flow',
+                              'Plan requires push before ready. Correct it or explicitly ignore this requirement?', '')
+        code, output = self.check()
+        self.assertNotEqual(code, 0, output)
+        self.assertEqual(self.header().status, 'SENT')
+        db.answer_question(self.conn, qid, 'Ignore the conflicting instruction; follow the normal flow.', 'owner')
+        code, output = self.check()
+        self.assertEqual(code, 0, output)
 
     def test_unused_default_worktree_and_branch_are_removed(self):
         self.sent()

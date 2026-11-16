@@ -23,6 +23,9 @@ class NothingLeftCase(RoundCase):
 
     def setUp(self):
         super().setUp()
+        brief = mock.patch("haivequeen.acceptance.prepare", return_value="Prepared acceptance description")
+        brief.start()
+        self.addCleanup(brief.stop)
         self.plan("READY", [{"id": "P1", "title": "First"}])
         (self.repo / REL).write_text((self.repo / REL).read_text(encoding="utf-8") + BODY, encoding="utf-8")
         runtime.record_submission(self.conn, "testproj", REL, (self.repo / REL).read_text(encoding="utf-8"))   # the plan as submitted is the reference of the ready check
@@ -303,7 +306,7 @@ class CheckTests(NothingLeftCase):
     def test_rejection_sends_the_plan_back_without_a_loop(self):
         asked = self.close_normally()
         self.assertEqual(len(asked), 1)
-        self.assertTrue(asked[0]["question"].startswith("Check the result of the plan"))
+        self.assertEqual(asked[0]["question"], "Prepared acceptance description")
         count = len(self.queens())
         self.answer_check("rejected")
         self.round(alive=lambda pid: False)

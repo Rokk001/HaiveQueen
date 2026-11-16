@@ -51,7 +51,7 @@ class S10Test(RoundCase):
         self.round()
         rows = [r for r in runtime.list_agents(self.conn, "testproj", "active") if r["status"] == "running"]
         self.assertEqual(len(rows), 1)
-        self.assertEqual((rows[0]["phase"], rows[0]["class"]), ("queen", "medium"))
+        self.assertEqual((rows[0]["phase"], rows[0]["class"]), ("queen", "heavy"))
 
     # Verify old verification streaks no longer create a package lock.
     def test_lock_without_triage(self):

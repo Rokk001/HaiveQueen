@@ -372,7 +372,7 @@ def answer_question(conn, qid: int, text: str, by: str, apiary: bool = False) ->
         row = conn.execute("SELECT * FROM questions WHERE id=?", (qid,)).fetchone()
         if row is None:
             raise KeyError(f"unknown question {qid}")
-        if row["status"] != "open" and not (row["status"] == "fault_check" and by == "coordinator"):
+        if row["status"] != "open" and not (row["status"] == "fault_check" and by == "coordinator") and not (row["status"] == "triage" and by == "owner"):
             raise KeyError(f"question {qid} is already answered")
         item = row['item'] or ''
         if item == 'owner-check' or (item.startswith('owner-check-') and item != 'owner-check-answered'):
@@ -394,6 +394,8 @@ def answer_question(conn, qid: int, text: str, by: str, apiary: bool = False) ->
         add_event(conn, row["project"], "answer", text, data={"question_id": qid, "by": by})
         from . import bees
         bees.answer_failure_question(conn, row, by)
+        from . import hives
+        hives.reconcile_answer_waits(conn, row['project'], row['plan_path'])
     return {"id": qid, "project": row["project"], "answered_by": by}
 
 

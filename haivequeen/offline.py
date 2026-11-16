@@ -11,9 +11,10 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import uuid
 from datetime import datetime, timedelta
 
-from . import localtime, profile, runtime, servers
+from . import db, localtime, profile, runtime, servers
 
 KEY = "provider-offline"
 GLOBAL = "*"
@@ -51,19 +52,22 @@ def _write(conn, data) -> None:
 def mark(conn, name, reason="", now=None) -> None:
     """Set the provider `name` offline (the time of the first mark stays, so the hover text says since when)."""
     now = now or datetime.now()
-    data = read(conn)
-    entry = data.get(name)
-    if entry is None:
-        entry = data[name] = {"since": _iso(now), "checked": _iso(now)}
-    entry["reason"] = " ".join(str(reason or "").split())[:200]
-    _write(conn, data)
+    with db.transaction(conn):
+        data = read(conn)
+        entry = data.get(name)
+        if entry is None:
+            entry = data[name] = {"since": _iso(now), "checked": _iso(now)}
+        entry["reason"] = " ".join(str(reason or "").split())[:200]
+        entry["revision"] = uuid.uuid4().hex
+        _write(conn, data)
 
 
 def clear(conn, name) -> None:
     """Set the provider `name` online again."""
-    data = read(conn)
-    if data.pop(name, None) is not None:
-        _write(conn, data)
+    with db.transaction(conn):
+        data = read(conn)
+        if data.pop(name, None) is not None:
+            _write(conn, data)
 
 
 def since_text(since) -> str:
@@ -96,6 +100,27 @@ def _model_of(p) -> str:
     return ""
 
 
+def _model_probe_completed(output) -> bool:
+    """Require a completed model answer, not a version banner or a zero-exit error event."""
+    answered = finished = False
+    for line in str(output or "").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("type")
+        if kind in ("error", "tool_use"):
+            return False
+        part = event.get("part") if isinstance(event.get("part"), dict) else {}
+        if kind == "text" and str(part.get("text") or "").strip():
+            answered = True
+        elif kind == "step_finish":
+            finished = True
+    return answered and finished
+
+
 def run_cli(p) -> bool:
     """A short call of the CLI of a provider (a one-word question, nothing else): True when it ends with exit code 0 within the time limit."""
     model = _model_of(p)
@@ -103,15 +128,19 @@ def run_cli(p) -> bool:
         args = ["-p", QUESTION, "--max-turns", "1"] + (["--model", model] if model else [])
     elif p.get("protocol") == "codex":
         args = ["exec", "--skip-git-repo-check"] + (["-m", model] if model else []) + [QUESTION]
+    elif p.get("protocol") in ("opencode", "kilo"):
+        if not model:
+            return False  # A default model might test a different provider.
+        args = ["run", "--format", "json", "--model", model, QUESTION]
     else:
-        args = ["--version"]
+        return False  # An unknown CLI has no reliable remote recovery probe.
     command = shutil.which(str(p.get("command") or "")) or str(p.get("command") or "")
     try:
         done = subprocess.run([command] + args, env=profile.environment(p), cwd=tempfile.gettempdir(), capture_output=True, text=True,
                               stdin=subprocess.DEVNULL, timeout=CLI_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError, ValueError):
         return False
-    return done.returncode == 0
+    return done.returncode == 0 and (p.get("protocol") not in ("opencode", "kilo") or _model_probe_completed(done.stdout))
 
 
 def probe(p) -> bool:
@@ -130,7 +159,7 @@ def recheck(conn, providers, minutes, now=None) -> list:
     """Check the offline providers among `providers` whose last check is `minutes` or more ago; the ones that answer are online at once. Returns their names."""
     now = now or datetime.now()
     data = read(conn)
-    back, changed = [], False
+    back = []
     for p in providers:
         entry = data.get(p["name"])
         if entry is None or not p.get("enabled", True):
@@ -138,12 +167,15 @@ def recheck(conn, providers, minutes, now=None) -> list:
         last = _parse(entry.get("checked")) or _parse(entry.get("since"))
         if last is not None and now - last < timedelta(minutes=float(minutes)):
             continue
-        if probe(p):
-            del data[p["name"]]
-            back.append(p["name"])
-        else:
-            entry["checked"] = _iso(now)
-        changed = True
-    if changed:
-        _write(conn, data)
+        recovered = probe(p)  # Never hold a write transaction during a slow network/CLI call.
+        with db.transaction(conn):
+            current = read(conn)
+            if current.get(p["name"]) != entry:
+                continue  # A newer failure or an explicit clear wins over this probe.
+            if recovered:
+                del current[p["name"]]
+                back.append(p["name"])
+            else:
+                current[p["name"]]["checked"] = _iso(now)
+            _write(conn, current)
     return back

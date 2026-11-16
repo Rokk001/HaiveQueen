@@ -21,3 +21,17 @@ A failed core start retains the start command's exit code and error in the updat
 Compatibility support is conservative: authenticated source identity and supported shared consumers are checked again at publication. Unknown changes remain deferred and cannot be forced. The supported settings transition moves machine configuration from `config.toml` to `hq-machine.toml` only for a release whose complete set of consumers matches that contract. It drains existing work just like the supported database transition. Settings move under shared-data and launch coordination; rollback preserves the latest contents. Conflicting files are retained and reported instead of overwritten. This does not rename configuration in existing installations merely by installing this code.
 
 The older checkout-only `bzz self-update` is a one-time transition and is retired once a release is published or the checkout is at a release tag. It is separate from the release workflow above.
+
+## Integration checkpoint
+
+The side-by-side implementation retains the current dashboard, provider adapters,
+process-identity guards and integration diagnostic collection. Detached Build and
+Deploy supervisors record their identity and version before execution is released;
+the successor reads their existing results instead of relaunching completed work.
+
+Focused process checks before integration covered compatible publication, retained
+workers, result adoption, next-Queen startup, database force, rollback, browser
+confirmation and rejection of unknown compatibility. No further test runs were
+performed for the final merge. This checkpoint is not a completed production
+acceptance or proof of every settings-transition failure path. Production activation
+and acceptance remain separate; merging does not update a running installation.

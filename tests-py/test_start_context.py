@@ -115,9 +115,9 @@ class OverlayTest(Base):
         """Queens: the online Queens; Busy Agents: the running Agents (the tile counts the Queens on top); each with the tokens of its run as in the table."""
         s = self.snap()
         self.assertEqual([(r["name"], r["tin"], r["tout"]) for r in s["overlays"]["queens"]["rows"]], [("Ava", 1000, 100), ("Eva", 2000, 200)])
-        self.assertEqual([(r["name"], r["tin"], r["tout"]) for r in s["overlays"]["bees"]["rows"]], [("Sophia", 600, 60)])
+        self.assertCountEqual([(r["name"], r["tin"], r["tout"]) for r in s["overlays"]["bees"]["rows"]], [("Ava", 1000, 100), ("Eva", 2000, 200), ("Sophia", 600, 60)])
         self.assertEqual(len(s["overlays"]["queens"]["rows"]), s["tiles"]["queens"])
-        self.assertEqual(len(s["overlays"]["bees"]["rows"]) + s["tiles"]["queens"], s["tiles"]["bees"])   # the busy tile counts the Queens and the Agents
+        self.assertEqual(len(s["overlays"]["bees"]["rows"]), s["tiles"]["bees"])
 
     def test_tile_without_units_shows_none(self):
         """A tile without units has no rows (the window draws "none")."""
@@ -138,7 +138,7 @@ class OverlayTest(Base):
         self.assertEqual((q["tin"], q["tout"]), (600, 60))   # her 1000/100 contain the subagent's 400/40
         b = next(r for r in s["overlays"]["bees"]["rows"] if r["name"] == "Mona")
         self.assertEqual((b["tin"], b["tout"]), (400, 40))
-        self.assertEqual(sum(r["tin"] for r in s["overlays"]["queens"]["rows"]) + sum(r["tin"] for r in s["overlays"]["bees"]["rows"]), 600 + 2000 + 600 + 400)
+        self.assertEqual(sum(r["tin"] for r in s["overlays"]["bees"]["rows"]), 600 + 2000 + 600 + 400)
         hive = next(r for r in s["overlays"]["hives"]["rows"] if r["apiary"] == "ODP")
         self.assertEqual(hive["tin"], 1900)   # unchanged: counted once
         row = next(r for r in s["bees"] if r["name"] == "Ava")

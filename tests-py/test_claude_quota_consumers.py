@@ -60,13 +60,13 @@ class ClaudeQuotaConsumersTest(unittest.TestCase):
         self.assertIsNone(row["ratio"])
         self.assertFalse(row["next"])
 
-    # A failed check keeps working on the last verified reading while it is recent: 13 % used must not look like 100 %.
-    def test_failed_refresh_keeps_a_recent_reading_for_starts(self):
+    # Retain historical display values, but wait for a successful refresh to start.
+    def test_failed_refresh_keeps_history_but_blocks_starts(self):
         self.snapshot(13, failed=True)
         self.assertEqual(scheduler.provider_limit(self.provider, self.conn)["FreePct"], 87)
         self.assertEqual(usage.get_provider_limit(self.conn, self.provider, read_pc=True)["free_pct"], 87)
         self.assertEqual([round(w["used_pct"]) for w in usage.limit_windows(self.conn, self.provider, read_pc=True)], [13])
-        self.assertIsNotNone(scheduler.select_provider([self.provider], "medium", [], {"claude": 5}, conn=self.conn))
+        self.assertIsNone(scheduler.select_provider([self.provider], "medium", [], {"claude": 5}, conn=self.conn))
 
     # Do not grant automatic work based on quota that could not be verified for a long time.
     def test_failed_refresh_with_an_old_reading_does_not_recommend_or_start_claude(self):

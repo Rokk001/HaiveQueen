@@ -33,12 +33,22 @@ def answer(conn, qid, text, rejected=(), apiary=False) -> None:
     text = (text or "").strip()
     if not text:
         raise ValueError(tr("Write an answer first."))
-    row = conn.execute("SELECT project, plan_path, item FROM questions WHERE id=?", (qid,)).fetchone()
-    db.answer_question(conn, qid, text, "owner", apiary=bool(apiary))
-    if row['item'] == 'owner-check' or str(row['item'] or '').startswith('owner-check-'):
-        return  # Free text is a note; package rejection requires an explicit decision.
-    for package in rejected:
-        bees.set_package_state(conn, row["project"], row["plan_path"], package, "rejected", "owner")
+    with db.transaction(conn):
+        row = conn.execute("SELECT project, plan_path, item FROM questions WHERE id=?", (qid,)).fetchone()
+        if row is None:
+            raise KeyError(f"unknown question {qid}")
+        note_only = row['item'] == 'owner-check' or str(row['item'] or '').startswith('owner-check-')
+        packages = ()
+        if not note_only:
+            if not isinstance(rejected, (list, tuple)):
+                raise ValueError('Rejected packages must be a list of package IDs')
+            packages = tuple(rejected)
+            known = set(plan_packages(conn, row['project'], row['plan_path']))
+            if any(not isinstance(package, str) or package not in known for package in packages):
+                raise ValueError('Rejected packages must belong to this plan')
+        db.answer_question(conn, qid, text, "owner", apiary=bool(apiary))
+        for package in dict.fromkeys(packages):
+            bees.set_package_state(conn, row["project"], row["plan_path"], package, "rejected", "owner")
 
 
 # The text of a refused answer.

@@ -195,7 +195,12 @@ def _candidate_reason(env, record, first, queue, integration_ref=None):
         return 'git status failed'
     if status.stdout:
         return 'uncommitted or untracked changes'
-    # Files the repository's .gitignore leaves out are build output: git status above already leaves them out, so they never keep a worktree.
+    allowed = env.settings.get('ignoredBuildOutput', [])
+    if not isinstance(allowed, list) or not all(isinstance(item, str) for item in allowed):
+        return 'invalid build output allowlist'
+    ignored = _ignored_blocker(path, allowed)
+    if ignored:
+        return 'protected ignored file: ' + ignored
     ref = integration_ref or str(env.settings.get('remoteName') or 'origin') + '/' + str(env.settings.get('integrationBranch') or 'main')
     ancestor = _git(env.code_repo, 'merge-base', '--is-ancestor', head.stdout.strip(), ref)
     if ancestor.returncode:

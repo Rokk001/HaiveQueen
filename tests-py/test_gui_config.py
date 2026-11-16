@@ -131,7 +131,7 @@ class DataLayerTest(unittest.TestCase):
 def sch_capabilities(entry):
     """The ticks of a saved provider entry as the program reads them."""
     from haivequeen import scheduler
-    return scheduler.provider_capabilities(entry)
+    return scheduler.declared_capabilities(entry)
 
 
 if __name__ == "__main__":

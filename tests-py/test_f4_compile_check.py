@@ -21,7 +21,7 @@ SLEEPER = "import time\nprint('test_before_the_stall', flush=True)\ntime.sleep(6
 STEADY = "import time\nfor i in range(12):\n    print('test_%d' % i, flush=True)\n    time.sleep(0.5)\n"
 BUSY = "import time\nend = time.time() + 7\nwhile time.time() < end:\n    sum(range(10000))\n"
 FOREVER = "import time\nwhile True:\n    print('tick', flush=True)\n    time.sleep(0.3)\n"
-QUICK = "import time\ntime.sleep(0.5)\n"
+QUICK = "print('check complete')\n"
 
 
 class CompileCheckCase(IntegrationCase):

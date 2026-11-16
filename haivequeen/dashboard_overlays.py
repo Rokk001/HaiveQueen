@@ -95,7 +95,7 @@ def build(conn, usage, agents_all, hive_rows, bees, apiaries, day, providers) ->
     overlays = {"apiaries": {"rows": [{"name": a, "tin": per_apiary.get(a, [0, 0])[0], "tout": per_apiary.get(a, [0, 0])[1]} for a in apiaries]},
                 "hives": {"rows": hives},
                 "queens": {"rows": [row(r) for r in bees if r["kind"] == "queen"]},
-                "bees": {"rows": [row(r) for r in bees if r["kind"] == "bee" and r["status"] == "running"]},
+                "bees": {"rows": [row(r) for r in bees if r["kind"] in ("queen", "bee", "fix") and r["status"] in ("running", "stopping")]},
                 "io": {"rows": io_rows(usage, today)},
                 "start": {"rows": start}}
     return overlays, tile

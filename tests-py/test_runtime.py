@@ -199,7 +199,7 @@ class RuntimeTest(unittest.TestCase):
         q2 = self.ok("ask", "--project", "p", "--plan", "x.md", "--item", "I2", "--question", "Q2?")["id"]
         self.assertEqual(len(self.ok("questions", "--project", "p", "--item", "I1")), 1)
         self.ok("answer", str(qid), "yes", "--by", "owner")
-        self.assertEqual(len(self.ok("questions", "--open")), 1)
+        self.assertEqual(len(self.ok("questions", "--status", "triage")), 1)
         self.assertEqual(len(self.ok("questions", "--status", "answered")), 1)
         self.assertEqual(self.ok("decisions", "list", "--project", "p", "--item", "I1")[0]["source"], "owner")
         self.ok("decisions", "add", "--project", "p", "--source", "auto", "--text", "d", "--item", "I3")

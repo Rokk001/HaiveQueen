@@ -25,6 +25,9 @@ class TerminologyTests(unittest.TestCase):
             text = path.read_text(encoding='utf-8')
             text = text.replace('bzz bee', '')
             text = text.replace('`hives`', '')  # Existing config key.
+            text = text.replace('`Hives`', '')  # Approved dashboard section title.
+            text = re.sub(r'`(?:hives|bees|apiary)\.[^`]+`', '', text)  # Internal code references.
+            text = text.replace('`hive-schedule.lock.recovered-<unique-id>`', '')  # Recovery artifact name.
             text = text.replace('`apiary`', '')  # Existing web API field.
             text = re.sub(r'`[^`]*\.(?:py|md|json|toml)`', '', text)  # Existing file names remain compatible.
             with self.subTest(path=str(path)):

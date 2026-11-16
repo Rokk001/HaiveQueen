@@ -69,6 +69,11 @@ class PlansTableMigrationTests(unittest.TestCase):
 class CapabilityRoutingTests(unittest.TestCase):
     """A capability is whatever a provider lists, not only images on Codex."""
 
+    def setUp(self):
+        from bzztest import verified_tool_evidence
+        verified_tool_evidence(self, {'b': ['speech']})
+
+
     def test_any_capability_routes_to_the_providers_that_offer_it(self):
         """A package needing "speech" runs on the provider that offers it, whatever its protocol, and escalates only among those."""
         providers = [{"name": "a", "protocol": "claude", "classes": {"medium": {"model": "m"}}, "capabilities": []},

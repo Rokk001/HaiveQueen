@@ -96,7 +96,8 @@ class StatusNameTests(RoundCase):
 class ReviewTests(RoundCase):
     """REVIEW while the integrated plan waits for the owner check, DONE after it."""
 
-    def test_integrated_plan_waits_in_review(self):
+    @mock.patch("haivequeen.acceptance.prepare", return_value="Prepared acceptance description")
+    def test_integrated_plan_waits_in_review(self, prepared):
         self.plan("RUNNING", [{"id": "P1", "title": "First"}])
         hives.create(self.conn, "testproj", REL, "claude", "FF0000")
         env = self.env()

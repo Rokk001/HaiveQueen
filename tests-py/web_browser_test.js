@@ -14,7 +14,16 @@ window.addEventListener('load', async () => {
 
   const buttons = text => [...document.querySelectorAll('button')].filter(node=>node.textContent===text || node.dataset.tab===text);
 
-  const click = async text => {const node=buttons(text).find(node=>!node.disabled);assert(node,'Missing enabled button: '+text);node.click();await new Promise(resolve=>setTimeout(resolve,20));const dialog=document.getElementById('confirmation-dialog');if(dialog?.open){warning=document.getElementById('confirmation-message').textContent;dialog.querySelectorAll('button')[confirmResult?1:0].click();await new Promise(resolve=>setTimeout(resolve,20));}await wait(()=>!node.disabled);};
+  const click = async text => {
+    const node=buttons(text).find(node=>!node.disabled);assert(node,'Missing enabled button: '+text);
+    node.click();
+    // Actions may load data before opening confirmation. Wait for either outcome,
+    // rather than checking the dialog once after an arbitrary 20 ms delay.
+    await wait(()=>document.getElementById('confirmation-dialog')?.open || !node.isConnected || !node.disabled);
+    const dialog=document.getElementById('confirmation-dialog');
+    if(dialog?.open){warning=document.getElementById('confirmation-message').textContent;dialog.querySelectorAll('button')[confirmResult?1:0].click();}
+    await wait(()=>!node.isConnected || !node.disabled);
+  };
 
   const field = path => [...document.querySelectorAll('[data-path]')].find(node=>node.dataset.path===JSON.stringify(path));
 
@@ -26,9 +35,9 @@ window.addEventListener('load', async () => {
 
   try {
 
-    await wait(()=>document.querySelector('[data-panel="QUEENS AND AGENTS"] h2'));
+    await wait(()=>document.querySelector('[data-panel="Hives"] h2'));
 
-    assert(document.querySelector('[data-panel="QUEENS AND AGENTS"] h2').textContent.startsWith('Hive'),'Hive heading missing');
+    assert(document.querySelector('[data-panel="Hives"] h2').textContent.startsWith('Hives'),'Hive heading missing');
     assert(!document.querySelector('.dashboard [data-panel="STATUS"]'),'Redundant status panel must be absent');
     assert(!document.querySelector('[data-panel="SYSTEM"] button'),'System card must not contain redundant details action');
     assert(document.querySelector('.quota-label')?.textContent,'Quota reserve label missing');
@@ -42,7 +51,7 @@ window.addEventListener('load', async () => {
 
     if(document.documentElement.lang==='de'){
 
-      assert(buttons('Allgemein').length && buttons('Anbieter').length && buttons('Projekte').length,'Language change did not translate tabs');
+      assert(buttons('System').length && buttons('KI-Anbieter').length && buttons('Projekte').length,'Language change did not translate tabs');
 
       await wait(()=>buttons('Sofort stoppen').length);
 
@@ -54,15 +63,15 @@ window.addEventListener('load', async () => {
 
       assert(document.body.textContent.includes('LÄUFT'),'Orchestrator state was not translated');
 
-      assert([...document.querySelectorAll('th')].some(node=>node.textContent==='LAUFZEIT'),'Runtime heading was not translated');
+      assert([...document.querySelectorAll('th,.hive-tree-heading span')].some(node=>node.textContent==='LAUFZEIT'),'Runtime heading was not translated');
 
-      assert([...document.querySelectorAll('td')].some(node=>node.textContent==='läuft'),'Agent state was not translated');
+      assert([...document.querySelectorAll('td,[data-column]')].some(node=>node.textContent==='läuft'),'Agent state was not translated');
 
-      assert([...document.querySelectorAll('td')].some(node=>node.textContent==='running'),'A user model name was translated');
+      assert([...document.querySelectorAll('td,[data-column]')].some(node=>node.textContent==='running'),'A user model name was translated');
 
       await click('Einstellungen');
 
-      await click('Anbieter');await wait(()=>field(['providers',0,'access']));
+      await click('KI-Anbieter');await wait(()=>field(['providers',0,'access']));
 
       const access=field(['providers',0,'access']);
 
@@ -80,7 +89,7 @@ window.addEventListener('load', async () => {
 
     }
 
-    await wait(()=>document.querySelector('table'));
+    await wait(()=>document.querySelector('.hive-tree-row'));
 
     const settingsMenu=document.querySelector('#settings-subnav');
 
@@ -88,7 +97,7 @@ window.addEventListener('load', async () => {
 
     await click('Settings');
 
-    assert(!settingsMenu.hidden && settingsMenu.querySelectorAll('[data-tab]').length===3,'Settings children missing');
+    assert(!settingsMenu.hidden && settingsMenu.querySelectorAll('[data-tab]').length===4,'Settings children missing');
 
     assert(getComputedStyle(settingsMenu).position==='absolute','Settings must open as an overlay dropdown');
 
@@ -102,13 +111,13 @@ window.addEventListener('load', async () => {
 
     assert(document.body.textContent.includes('mock-agent'),'Agent snapshot missing');
 
-    assert(document.querySelector('.brand-banner')?.complete,'Brand banner missing');
+    assert(document.querySelector('.header-queen')?.complete,'Header emblem missing');
 
     assert(document.querySelector('#app.dashboard'),'Dashboard layout missing');
 
-    const projectMenu=document.querySelector('button[aria-label="Actions · Project · demo"]');
+    const projectMenu=document.querySelector('button[aria-label="Open details · Project · demo"]');
 
-    const queenMenu=document.querySelector('button[aria-label="Actions · Queen · Test Queen"]');
+    const queenMenu=document.querySelector('button[aria-label="Open details · Queen · Test Queen"]');
 
     assert(projectMenu && queenMenu,'Project or Queen action menu missing');
 
@@ -134,23 +143,40 @@ window.addEventListener('load', async () => {
 
     assert(!document.querySelector('[data-panel="Activity"]'),'Activity panel remains');
 
-    assert(document.querySelector('.dashboard-primary').children.length===2,'Left column must contain only two panels');
+    assert(document.querySelector('.dashboard-primary').children.length===1,'Left column must contain the unified Hives panel');
 
     assert(document.querySelector('[data-tab="Questions"] .question-badge')?.textContent==='2','Question badge missing');
 
-    assert(!document.querySelector('[data-panel="Queue"] button'),'Queue questions action remains');
+    assert(document.querySelectorAll('.queue-list li').length===2,'Queue must exclude active and duplicate plans');
+    assert(document.querySelector('.queue-count strong').textContent==='2','Queue count must match visible plans');
+    assert(!document.querySelector('.queue-list').textContent.includes('in_run'),'Internal queue status leaked');
 
     const headings=panel=>[...document.querySelectorAll(`[data-panel="${panel}"] th`)].map(node=>node.textContent).join('|');
 
-    assert(headings('ACTIVE PLANS')==='#|PLAN|PROJECT|QUEEN|AGENTS|PROGRESS|STATUS|RUNTIME','Plan columns differ from desktop GUI');
+    assert(document.querySelector('.hive-tree-project'),'Project root missing');
+    assert(!document.querySelector('.hives-list table'),'Nested tables remain');
 
-    assert(headings('QUEENS AND AGENTS')==='#|AGENT|MODEL|PLAN|TASK|CONTEXT|TOKENS|STATUS|RUNTIME','Agent columns differ from desktop GUI');
+    assert(document.querySelector('.hive-tree-heading').children.length===7,'Shared columns missing');
+    assert(document.querySelector('.hive-tree-row .hq-steps'),'HQ integration steps missing');
+    assert(!document.querySelector('.hive-tree-orch [data-column=status] .hq-steps'),'HQ steps duplicated in status');
+    if(innerWidth>1100){
+      for(const row of document.querySelectorAll('.hive-tree-row:not([hidden]):not(.hive-tree-orch)'))assert(row.getBoundingClientRect().height<=44,'Desktop tree row wastes vertical space: '+row.className+' '+row.getBoundingClientRect().height);
+      for(const steps of document.querySelectorAll('.hive-tree-row .hq-steps')){
+        const tops=[...steps.children].map(node=>Math.round(node.getBoundingClientRect().top));
+        assert(steps.scrollWidth<=steps.clientWidth,'Integration steps must fit without horizontal scrolling');
+        for(const button of steps.children)assert(button.getBoundingClientRect().height<=24,'Desktop step buttons must remain compact');
+        assert(steps.closest('.hive-tree-row').getBoundingClientRect().height<=new Set(tops).size*28+24,'Wrapped pipeline has excessive vertical spacing');
+      }
+    }
+    const projectToggle=document.querySelector('.hive-tree-project .hive-tree-toggle');projectToggle.click();
+    assert(document.querySelector('.hive-tree-plan').hidden,'Project collapse must hide descendants');await wait(()=>!document.querySelector('.hive-tree-project .hive-tree-toggle').disabled);document.querySelector('.hive-tree-project .hive-tree-toggle').click();
+    assert(!document.querySelector('.hive-tree-plan').hidden,'Project expand must restore descendants');
 
-    assert(document.querySelector('tr.child-agent .tree-branch'),'Agent hierarchy missing');
+    assert(document.querySelector('.hive-tree-row .child-agent .tree-branch'),'Agent hierarchy missing');
 
     assert(!document.querySelector('#app [data-panel="Projects"]'),'Redundant Projects dashboard panel remains');
 
-    assert(document.querySelector('.dashboard-primary [data-panel="ACTIVE PLANS"]'),'Independent plan column missing');
+    assert(document.querySelector('.dashboard-primary [data-panel="Hives"]'),'Independent plan column missing');
 
     assert(!document.querySelector('[data-panel="LOG"]'),'Logs should have their own tab');
 
@@ -160,7 +186,7 @@ window.addEventListener('load', async () => {
 
     await click('Dashboard');
 
-    document.querySelector('button[aria-label="Actions · mock-agent"]').click();
+    document.querySelector('button[aria-label="Open details · mock-agent"]').click();
 
     await click('Filter log');
 
@@ -170,7 +196,7 @@ window.addEventListener('load', async () => {
 
     assert(document.querySelector('.dashboard-secondary [data-panel="SYSTEM"]'),'Compact system panel missing');
 
-    assert(document.querySelector('td[data-label]'),'Mobile table labels missing');
+    assert(document.querySelector('[data-column][data-label]'),'Mobile table labels missing');
 
     const limits=document.querySelector('.model-limits');
 
@@ -182,9 +208,12 @@ window.addEventListener('load', async () => {
 
     const metric=document.querySelector('[data-tile="bees"]');
 
-    metric.focus();assert(!document.querySelector('#tile-preview').hidden,'Metric focus preview missing');
+    document.dispatchEvent(new Event('scroll'));
+    metric.focus();assert(document.querySelector('#tile-preview').hidden,'Metric focus must not open details');
+    metric.dispatchEvent(new PointerEvent('pointerenter',{pointerType:'mouse'}));
+    assert(document.querySelector('#tile-preview').hidden,'Metric hover must not open details');
 
-    metric.click();await wait(()=>document.querySelector('#detail').open);
+    document.querySelector('[data-tile="bees"]').click();await wait(()=>document.querySelector('#detail').open);
 
     assert(document.querySelector('#detail .tile-content'),'Metric detail content missing');
 
@@ -211,6 +240,7 @@ window.addEventListener('load', async () => {
     if(document.querySelector('#settings-subnav').hidden)await click('Settings');
 
     await click('General');await wait(()=>field(['web','port']));
+    await click('Web access');
 
     input(['web','port'],'9494');await click('Save');
 
@@ -234,8 +264,25 @@ window.addEventListener('load', async () => {
 
     if(document.querySelector('#settings-subnav').hidden)await click('Settings');
 
-    await click('Providers');await wait(()=>buttons('Login').length);
+    await click('Git connections');await wait(()=>buttons('Save access token').length);
+    assert(!document.querySelector('.git-connections').open,'Git credentials must start compact');
+    document.querySelector('.git-connections').open=true;
+    document.querySelector('.git-connection').open=true;
+    assert(document.body.textContent.includes('One access token is shared'),'Shared token login is not explained');
+    assert(!buttons('Sign in in browser').length,'Deferred Git device login is offered');
+    assert(!document.querySelector('[aria-label="Registered public OAuth client ID"]'),'Deferred OAuth registration is offered');
+    const gitToken=document.querySelector('[aria-label="Access token"]');
+    assert(gitToken.type==='password','Git token is not masked');
+    gitToken.value='test-token';await click('Save access token');
+    await wait(()=>document.body.textContent.includes('Current method: Access token'));
+    requests=await (await fetch('/test-actions')).json();
+    assert(requests.some(row=>row.action==='git-login/token'&&row.data.provider==='example'&&row.data.token==='test-token'),'Provider token was not saved');
+    assert(!requests.some(row=>row.action==='git-login/start'||row.action==='git-login/poll'),'Deferred Git device endpoint was used');
+    assert(document.querySelector('[aria-label="Access token"]').value==='','Saved token remains in the form');
 
+    if(document.querySelector('#settings-subnav').hidden)await click('Settings');
+    await click('Providers');await wait(()=>buttons('Login').length);
+    assert(!document.querySelector('.git-connections'),'Git credentials must not be mixed with AI settings');
     await click('Login');await wait(()=>document.querySelector('[id^=login-] a'));
 
     const panel=document.querySelector('[id^=login-]');
@@ -250,11 +297,11 @@ window.addEventListener('load', async () => {
 
     input(['providers',0,'classes','medium','model'],'own-model');
 
-    input(['providers',0,'allowedTools'],'Read\nBash(cmd(a,b))');
+    assert(!field(['providers',0,'allowedTools']),'Duplicate tool editor remains');
 
     const args=field(['providers',0,'args']);
 
-    input(['providers',0,'args'],args.value+'\n--extra');
+    input(['providers',0,'args'],args.value+'\n--allowedTools\nRead,Bash(cmd(a,b))\n--extra');
 
     assert(buttons('Login')[0].disabled,'Unsaved provider still offers login');
 
@@ -275,14 +322,47 @@ window.addEventListener('load', async () => {
     if(document.querySelector('#settings-subnav').hidden)await click('Settings');
 
     await click('Projects');await wait(()=>field(['compileCheck']));
+    assert(field(['name']).closest('.settings-category').dataset.category==='Basics','Name is not under Basics');
+    assert(field(['integrationBranch']).closest('.settings-category').hidden,'Advanced categories should start hidden');
+    const search=document.querySelector('.settings-search');search.value='integration';search.dispatchEvent(new Event('input'));
+    assert(!field(['integrationBranch']).closest('.settings-category').hidden,'Search did not find integration settings');
+    await click('Workflow and checks');
+    const command=field(['compileCheck']);const original=command.value;
+    input(['compileCheck'],'');await click('Basics');
+    const beforeInvalid=(await (await fetch('/test-actions')).json()).filter(row=>row.action==='settings/save').length;
+    await click('Save');
+    assert(!field(['compileCheck']).closest('.settings-category').hidden,'Invalid field category must be shown');
+    const afterInvalid=(await (await fetch('/test-actions')).json()).filter(row=>row.action==='settings/save').length;
+    assert(beforeInvalid===afterInvalid,'Invalid command was saved');input(['compileCheck'],original);
+    await click('Workflow and checks');
+    for(const name of ['Basics','Workflow and checks','Agent rules','Git and cleanup','Advanced']){
+      await click(name);assert(document.documentElement.scrollWidth<=innerWidth,'Settings overflow in '+name);
+    }
+    await click('Workflow and checks');
+    const way=document.querySelector('[aria-label="Way of working"]');
+    assert(way && way.options.length===3,'Workflow choices missing');
+    assert([...document.querySelectorAll('.workflow-step h3')].filter(node=>['Merge','Check','Build','Deploy','Release'].includes(node.textContent)).length===5,'Workflow rows missing');
+    assert(!document.querySelector('[aria-label="Merge on"]'),'Merge must not have an off switch');
+    assert(!document.getElementById('app').textContent.includes('Publish release at integration'),'Legacy release switch remains');
+    assert(!field(['compileCheck']).disabled && field(['compileCheck']).required,'Enabled local check must require its command');
+    assert(!field(['buildCommand']),'Disabled build must not show an empty command');
+    assert(document.querySelector('[data-workflow-step=build] .workflow-location').hidden,'Disabled step must be compact');
+    way.value='git';way.dispatchEvent(new Event('change'));
+    assert(field(['compileCheck']),'Template selection applied without explicit action');
+    await click('Apply template');
+    assert(!field(['compileCheck']),'Provider check must not show a local command');
+    assert(document.querySelector('[aria-label="Release location"] [data-mode=git]').disabled,'Unsupported provider release must be greyed');
+    assert(document.querySelector('.settings-workflow-summary').textContent.includes('Git provider'),'Effective workflow missing');
+    document.querySelector('[aria-label="Check location"] [data-mode=local]').click();
+    assert(document.querySelector('[aria-label="Way of working"]').value==='custom','Manual change must select Custom');
+    document.querySelector('[aria-label="Way of working"]').value='local';await click('Apply template');
 
     assert(field(['integrationBranch']).value==='develop','Repository default branch was replaced');
 
     const rule=[...document.querySelectorAll('label')].find(node=>node.textContent.includes('AGENTS.md, 12 tokens'));
 
     assert(rule,'Knowledge-base file and token count missing');rule.querySelector('input').click();
-
-    await click('Save');await wait(()=>document.getElementById('notice').textContent==='Done');
+    await click('Save');await wait(()=>document.getElementById('notice').textContent==='Saved.');
 
     requests=await (await fetch('/test-actions')).json();
 
@@ -291,22 +371,41 @@ window.addEventListener('load', async () => {
     assert(project.project==='demo' && project.data.rulesOff.includes('AGENTS.md'),'Knowledge-base switch not saved');
 
     assert(project.place.plansFolder==='demo-plans','Project place missing');
+    await click('Reload');await wait(()=>document.getElementById('dirty-marker').textContent==='');
+    assert(document.querySelector('[aria-label="Check location"] [data-mode=local]').getAttribute('aria-checked')==='true','Saved workflow choice was not reloaded');
+    const selectProject=document.querySelector('[aria-label="Project"]');selectProject.value='local-only';selectProject.dispatchEvent(new Event('change'));
+    await wait(()=>document.body.textContent.includes('Only Local is available.'));
+    assert([...document.querySelector('[aria-label="Way of working"]').options].filter(option=>option.value!=='local').every(option=>option.disabled),'Unsupported remote offers nonlocal choice');
+    assert(['Merge','Check','Build','Deploy','Release'].every(name=>document.querySelector('[aria-label="'+name+' location"] [data-mode=git]').disabled),'Unsupported remote offers provider toggles');
+    await click('Releases');await wait(()=>buttons('Publish as full release').length);
+    assert(buttons('Publish as full release').length===1,'Full release must not offer promotion');
+    for(const value of ['v2.0.1-dev.3','2026-01-02','a'.repeat(40),'Prerelease'])assert(document.body.textContent.includes(value),'Missing release metadata '+value);
+    await click('Publish as full release');
+    requests=await (await fetch('/test-actions')).json();
+    const promotion=requests.find(row=>row.action==='releases/promote');
+    assert(document.querySelector('.release-card .release-badge').textContent==='Publishing\u2026','Card must show pending publication');
+    assert(buttons('Publishing\u2026')[0].disabled,'Pending promotion must stay disabled after acceptance');
+    assert(promotion.data.tag==='v2.0.1-dev.3' && promotion.data.confirmed===true && !promotion.data.commit,'Promotion must send selected tag and confirmation only');
 
     await click('Questions');await wait(()=>document.querySelector('[data-question]'));
 
-    const answer=document.querySelector('[data-question] textarea');answer.value='Proceed';
+    const answer=document.querySelector('[data-question] textarea');
+    assert(answer.getAttribute('data-copy')==='off','Answer composer must opt out of output copy controls');
+    assert(!document.querySelector('[data-question] .copy-output'),'Answer composer must remain undecorated');
+    answer.value='Proceed';
 
     await click('Answer');
 
+    await wait(()=>buttons('Accept').some(button=>!button.disabled));
     await click('Accept');
 
     await wait(()=>!document.querySelector('[data-tab="Questions"] .question-badge'));
 
-    await click('Plans');await wait(()=>buttons('Plan').length);
+    await click('Plans');await wait(()=>buttons('View plan').length);
 
-    assert([...document.querySelectorAll('th')].some(node=>node.textContent==='Started'),'Desktop plan Started column missing');
+    assert(document.querySelector('.plan-status-tabs') && document.querySelector('.plan-overview-card'),'Plan status tabs and cards missing');
 
-    await click('Plan');
+    await click('View plan');
 
     await wait(()=>document.querySelector('.plan-document h2')?.textContent==='Mock plan');
 
@@ -328,7 +427,7 @@ window.addEventListener('load', async () => {
 
     document.getElementById('close-detail').click();
 
-    await click('Dashboard');document.querySelector('button[aria-label="Actions · mock-agent"]').click();await wait(()=>document.querySelector('#detail .live-output'));
+    await click('Dashboard');document.querySelector('button[aria-label="Open details · mock-agent"]').click();await wait(()=>document.querySelector('#detail .live-output'));
 
     await wait(()=>document.querySelector('.live-output')?.textContent.includes('live milestone'));
 
@@ -336,7 +435,10 @@ window.addEventListener('load', async () => {
 
     document.getElementById('close-detail').click();
 
-    await click('Check now');await wait(()=>buttons('Update').length);await click('Update');
+    await click('Check now');await wait(()=>buttons('Update to v9.0.0').length);await click('Update to v9.0.0');
+    await wait(()=>document.getElementById('update-status').textContent.includes('installing version'));
+    assert(buttons('Update to v9.0.0').length===0,'Accepted update must not revert to an install offer');
+    assert(buttons('Check now')[0].disabled,'Update check must remain disabled while installing');
 
     requests=await (await fetch('/test-actions')).json();
 

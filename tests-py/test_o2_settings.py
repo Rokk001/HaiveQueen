@@ -6,13 +6,14 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from bzztest import REL, RoundCase
 from haivequeen import bees, cli, db, settings, hives, integration, orchestrator, owner, plans, projsettings, runtime, scheduler
 from haivequeen.i18n import tr
 
-REMOVED = ("buildEnabled", "deployEnabled", "buildFlowDoc", "integratorInstructions")
+REMOVED = ("buildFlowDoc", "integratorInstructions")
 LEGACY = ("INTEGRATION-BUILD", "INTEGRATION-DEPLOY")
 
 
@@ -46,11 +47,13 @@ class SettingsGone(unittest.TestCase):
             self.assertNotIn(key, scheduler.DEFAULT_SETTINGS)
         self.assertEqual((scheduler.DEFAULT_SETTINGS["buildCommand"], scheduler.DEFAULT_SETTINGS["deployCommand"]), ("", ""))
 
-    def test_a_project_file_cannot_bring_them_back(self):
+    def test_legacy_project_switches_are_derived_from_commands(self):
         merged = scheduler.build_settings({}, {"buildEnabled": False, "deployEnabled": True, "buildFlowDoc": "x.md", "integratorInstructions": "y", "buildCommand": "make"})
         for key in REMOVED:
             self.assertNotIn(key, merged)
         self.assertEqual(merged["buildCommand"], "make")
+        commands = orchestrator.commands(SimpleNamespace(settings=merged))
+        self.assertEqual((commands["Build"], commands["Deploy"]), ("make", ""))
 
     def test_no_step_package_machinery_is_left(self):
         for name in ("switches", "step_states", "sync", "open_steps", "done_refusal", "result_refusal", "reset", "BUILD", "DEPLOY"):
@@ -75,9 +78,11 @@ class Migration(unittest.TestCase):
         new, removed = projsettings.migrate_data(old, "C:/ws", {})
         for key in REMOVED:
             self.assertNotIn(key, new)
+        self.assertTrue(new["buildEnabled"])
+        self.assertTrue(new["deployEnabled"])
         self.assertEqual((new["buildCommand"], new["deployCommand"], new["compileCheck"]), ("make", "make deploy", "make test"))
         listed = {key: value for key, value, _note in removed}
-        self.assertEqual({key: listed[key] for key in REMOVED}, {"buildEnabled": False, "deployEnabled": True, "buildFlowDoc": "docs/BUILD.md", "integratorInstructions": "ship it"})
+        self.assertEqual({key: listed[key] for key in (*REMOVED, "buildEnabled", "deployEnabled")}, {"buildEnabled": False, "deployEnabled": True, "buildFlowDoc": "docs/BUILD.md", "integratorInstructions": "ship it"})
         text = projsettings.removed_text(removed, "2026-11-11 12:00")
         self.assertIn("`buildFlowDoc` = 'docs/BUILD.md'", text)
         self.assertIn("`deployEnabled` = True", text)

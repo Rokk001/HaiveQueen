@@ -57,6 +57,30 @@ class InboxTest(RoundCase):
         self.assertIn("line 5", reason)
         self.assertTrue(any(e["kind"] == "events" and "bad.toml" in e["text"] for e in runtime.list_events(self.conn, "testproj")))
 
+    def test_foreign_question_rejects_entire_file_for_each_author(self):
+        """An inbox cannot answer another project's question, even alongside valid local entries."""
+        foreign = db.add_question(self.conn, "otherproj", REL, "P1", "Other project question", "No")
+        original_questions = [dict(row) for row in self.conn.execute("SELECT * FROM questions ORDER BY id")]
+        original_foreign_events = runtime.list_events(self.conn, "otherproj")
+        original_decisions = [dict(row) for row in self.conn.execute("SELECT * FROM decisions ORDER BY id")]
+        for author in ("owner", "coordinator"):
+            with self.subTest(author=author):
+                name = author + ".toml"
+                self.put(name, ('[[answer]]\nquestion_id = %d\ntext = "Local answer"\nby = "%s"\n'
+                                '[[answer]]\nquestion_id = %d\ntext = "Foreign answer"\nby = "%s"\n'
+                                '[[decision]]\ntext = "Must not apply"\nsource = "%s"\n')
+                         % (self.qid, author, foreign, author, author))
+                result = inbox.process_inbox(self.env())
+                self.assertEqual(result, {"done": [], "failed": [name]})
+                self.assertEqual([dict(row) for row in self.conn.execute("SELECT * FROM questions ORDER BY id")], original_questions)
+                self.assertEqual([dict(row) for row in self.conn.execute("SELECT * FROM decisions ORDER BY id")], original_decisions)
+                self.assertEqual(runtime.list_events(self.conn, "otherproj"), original_foreign_events)
+                self.assertTrue((self.box / "failed" / name).exists())
+                reason = (self.box / "failed" / (author + ".error.txt")).read_text(encoding="utf-8")
+                self.assertIn("question %d does not belong to the inbox project" % foreign, reason)
+                self.assertIn("line 5", reason)
+                self.assertNotIn("otherproj", reason)
+
     def test_parse_error_and_wrong_value(self):
         """A TOML parse error and a wrong value (by = robot) both end in failed/ with an error file."""
         self.put("broken.toml", '[[answer]\nquestion_id = 1\n')
