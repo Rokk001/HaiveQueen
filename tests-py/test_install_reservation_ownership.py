@@ -56,6 +56,48 @@ class ReservationOwnershipTests(unittest.TestCase):
             self.assertNotIn(owned, leases)
             self.assertIn('install-other', leases)
 
+    def test_rejection_cleans_only_owned_real_staging_reservation(self):
+        for raising in (False, True):
+            with self.subTest(raising=raising), tempfile.TemporaryDirectory() as root:
+                data = archive([('project/haivequeen/cli.py', 'code')])
+                fetch = authenticated_fetch(data)
+                _, old = release_staging.stage_release(root, 'example/project', '1.0.0', fetch, return_token=True)
+                version_layout.set_active(root, '1.0.0', installation_token=old)
+                target, owned = release_staging.stage_release(root, 'example/project', '2.0.0', fetch, return_token=True)
+                candidate = target / 'haivequeen' / 'cli.py'
+                expected = candidate.read_bytes()
+                candidate.write_bytes(b'mutated')
+                leases = version_leases._load(root)
+                leases['install-other'] = dict(leases[owned])
+                version_leases._save(root, leases)
+                def verify():
+                    if raising:
+                        raise ValueError('verifier failed')
+                    return candidate.read_bytes() == expected
+                with self.assertRaises((RuntimeError, ValueError)):
+                    release_activation.activate(root, '2.0.0', lambda: self.fail('published'), installation_token=owned, target_verifier=verify)
+                leases = version_leases._load(root)
+                self.assertNotIn(owned, leases)
+                self.assertIn('install-other', leases)
+                self.assertTrue(target.exists())
+                self.assertEqual(Path(root, 'active-version').read_text().strip(), '1.0.0')
+
+    def test_rejection_retains_invalid_foreign_and_uncertain_reservations(self):
+        for field, value in [('installation', False), ('version', '1.0.0'), ('installer_pid', -1), ('installer_identity', ''), ('installer_identity', 'foreign')]:
+            with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as root:
+                data = archive([('project/haivequeen/cli.py', 'code')])
+                fetch = authenticated_fetch(data)
+                _, old = release_staging.stage_release(root, 'example/project', '1.0.0', fetch, return_token=True)
+                version_layout.set_active(root, '1.0.0', installation_token=old)
+                _, owned = release_staging.stage_release(root, 'example/project', '2.0.0', fetch, return_token=True)
+                leases = version_leases._load(root)
+                leases[owned][field] = value
+                version_leases._save(root, leases)
+                with self.assertRaises(RuntimeError):
+                    release_activation.activate(root, '2.0.0', lambda: self.fail('published'), installation_token=owned, target_verifier=lambda: False)
+                self.assertIn(owned, version_leases._load(root))
+                self.assertEqual(Path(root, 'active-version').read_text().strip(), '1.0.0')
+
     def test_worker_carries_real_staging_token_to_activation(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict('os.environ', {'BZZ_DATA_DIR': temp}):
             root = Path(temp, 'install')

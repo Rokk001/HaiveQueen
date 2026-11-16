@@ -1,4 +1,5 @@
 """Activation primitive for an already checked compatible release."""
+import os
 from pathlib import Path
 
 from . import version_layout, version_leases
@@ -19,8 +20,25 @@ def activate(root, version, first_round, after_rollback=None, installation_token
     """
     root = Path(root)
     with lifetime_lock(root):
-        if target_verifier is None or target_verifier() is not True:
-            raise RuntimeError('target verification failed')
+        try:
+            if target_verifier is None or target_verifier() is not True:
+                raise RuntimeError('target verification failed')
+        except BaseException:
+            # The verifier may reject or raise. Do not guess ownership when a
+            # process identity cannot be established; leave recovery to retry.
+            if isinstance(installation_token, str):
+                leases = version_leases._load(root)
+                record = leases.get(installation_token, {})
+                try:
+                    identity = version_leases.platform.process_identity(os.getpid())
+                except Exception:
+                    identity = None
+                if (record.get('installation') is True and record.get('version') == version
+                        and record.get('installer_pid') == os.getpid()
+                        and identity and record.get('installer_identity') == identity):
+                    leases.pop(installation_token)
+                    version_leases._save(root, leases)
+            raise
         old = (root / 'active-version').read_text(encoding='utf-8').strip()
         token = version_leases._reserve_locked(root, old)
         try:
