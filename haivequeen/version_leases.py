@@ -9,6 +9,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 import shutil
+import stat
 import tempfile
 import uuid
 
@@ -80,6 +81,39 @@ def exclusive_empty_registry(root):
     with exclusive_registry_snapshot(root) as value:
         if value:
             raise ValueError('version lease registry is not empty')
+        yield
+
+
+@contextmanager
+def guarded_process_scan(root):
+    """Filter observed or uncertain users while holding both Windows gates.
+
+    A clear scan is not proof of drain: a loaded legacy caller may be invisible.
+    This context does not make activation or registry replacement safe.
+    """
+    if os.name != 'nt':
+        raise OSError('guarded process scans require Windows')
+
+    def validate_directory(info):
+        # Windows junctions and other reparse points must not be followed.
+        if (not stat.S_ISDIR(info.st_mode)
+                or getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            raise ValueError('invalid version directory')
+
+    root = Path(root)
+    with lifetime_lock(root), exclusive_empty_registry(root):
+        versions = root / 'versions'
+        validate_directory(versions.lstat())
+        with os.scandir(versions) as entries:
+            found = False
+            for entry in entries:
+                found = True
+                _version(entry.name)
+                validate_directory(entry.stat(follow_symlinks=False))
+                if process_scan.scan(Path(entry.path)) is not False:
+                    raise ValueError('version process scan is not clear')
+            if not found:
+                raise ValueError('no version directories')
         yield
 
 
