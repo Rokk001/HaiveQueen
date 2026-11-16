@@ -80,3 +80,47 @@ grant. Structural validation cannot prove that differently worded proposals are
 semantically different or that an agent will implement them successfully; that
 judgment remains the diagnosis agent's responsibility and completion still needs
 verification. This change does not claim to complete any live project plan.
+
+## Executable contracts and repair-level progress
+
+Technical package diagnoses now include one authoritative `contract`: `objective`,
+`why_executable`, `prerequisites`, `requires`, `resolves` and `criteria`. Each
+prerequisite has a stable `id`, `status` (verified/unresolved), `reason`, and, when
+verified, `evidence` indexes into the report's evidence list. Required prerequisites
+must be verified. A step cannot assume the prerequisite it is assigned to establish;
+unresolved prerequisites cannot disappear from subsequent contracts. An independently
+executable prerequisite step can proceed while the larger implementation stays blocked.
+The model evaluates evidence and feasibility; Python checks dependency consistency,
+not the truth of arbitrary prose.
+
+Every criterion has a unique `id`, `expectation`, and focused `check` command.
+HQ delivers the complete next_action, continuation assessment and contract, including
+safety and cleanup conditions. A shortened continuation no longer replaces the full
+instruction. The contract digest and actual attempt identity are stored at Agent
+start. Legacy grants without this protocol cannot launch a repair: they need a new
+diagnosis, with history preserved.
+
+After reviewing a completed step, the Queen submits `agent result --outcome progress
+--repair-result <file>` with `attempt`, `contract` digest, current `commit`, and
+`checks`. Each criterion occurs exactly once with its prescribed command, actual
+zero `exit`, and relative `log`. Nonempty logs must reside beneath the receipt's
+directory; their hashes are retained. Invalid receipts do not release Agent slots
+or modify failure state. HQ validates reported evidence rather than independently
+rerunning it: Agents must not fabricate results and the Queen must review them.
+
+Progress leaves the package open and preserves failure counters without incrementing
+them. The receipt survives restart. The next diagnosis receives that verified progress
+and selects the next unresolved prerequisite. Remaining package requirements are not
+a failure of the completed step. A new reproduction is not demanded merely because
+a verified step left the commit unchanged. Later genuine failures still enter
+diagnosis without erasing earlier progress; replayed receipts cannot close another
+attempt. Normal package success still requires the complete package's verification.
+
+While diagnosis or an owner prerequisite is pending, result responses return
+`nextAction: wait_for_diagnosis` or `wait_for_owner`, without a contradictory
+`nextClass`. Class changes still require a reasoned diagnosis and configured model.
+
+Focused flow tests cover blocked prerequisites, independent repair dispatch, complete
+cleanup-criterion handoff, receipt validation, restart persistence, independent work,
+next-step dispatch followed by another genuine failure, and stale grants and receipts.
+They operate on isolated fixtures, not live plans or processes.

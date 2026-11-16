@@ -5,7 +5,7 @@ import math
 import re
 from pathlib import Path
 
-from . import bees, db, repair_review, roles, runtime
+from . import bees, db, repair_contract, repair_review, roles, runtime
 
 
 def _digest(value):
@@ -96,8 +96,10 @@ def continuation(conn, project, plan, package, state, report, selected):
     if (not isinstance(follow, dict) or follow.get('previous') != _digest(previous)
             or not history or follow.get('attempt') != history[0]['attempt']):
         raise ValueError('continuation must review the last accepted diagnosis and latest repair attempt')
-    if follow.get('outcome') not in ('no_progress', 'partial'):
-        raise ValueError('continuation must distinguish no_progress from partial repair')
+    if follow.get('outcome') not in ('no_progress', 'partial', 'step_complete'):
+        raise ValueError('continuation must distinguish no_progress, partial and step_complete')
+    if follow.get('outcome') == 'step_complete' and not state.get('progress', {}).get(follow['attempt']):
+        raise ValueError('step_complete requires a verified repair receipt')
     for field in ('reason', 'target', 'change', 'verification'):
         if not isinstance(follow.get(field), str) or not follow[field].strip():
             raise ValueError('continuation requires reason, target, change and focused verification')
@@ -128,9 +130,13 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
         if signature in accepted and not (report['kind'] == 'technical' and report.get('experiment')):
             raise ValueError('this diagnosis has already authorized a retry')
         experiment = None
-        if report['kind'] == 'technical' and (unchanged_retry(state, expected) or report.get('experiment')):
+        latest = bees.attempt_history(conn, project, plan, package, limit=1)['attempts']
+        progress = state.get('progress', {}).get(latest[0]['attempt']) if latest else None
+        verified_progress = progress and progress.get('commit') == expected['commit']
+        if report['kind'] == 'technical' and ((unchanged_retry(state, expected) and not verified_progress) or report.get('experiment')):
             experiment = experiment_evidence(report, path, state, expected)
         follow = continuation(conn, project, plan, package, state, report, selected)
+        contract = repair_contract.validate(report, state.get('report')) if report['kind'] == 'technical' else None
         if experiment:
             signature = _digest([signature, experiment])
             if 'experiment_scopes' not in state:
@@ -143,13 +149,12 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
             state['experiment_log'] = str((Path(path).parent / report['experiment']['log']).resolve())
         instruction = '\n'.join(report[k] for k in ('analysis', 'next_action', 'why_new')) if report['kind'] == 'technical' else ''
         steps = None
-        if follow:
-            detail, action = follow
-            steps = ['Implement %s: %s' % (detail['target'], detail['change']),
-                     'Verify: ' + detail['verification'],
-                     'Report verified changes and remaining requirements; commit only verified work.']
-            instruction = ('Continue after attempt %s (%s). Why it stopped: %s\n%s' %
-                           (detail['attempt'], detail['outcome'], detail['reason'], '\n'.join(steps)))
+        if contract:
+            instruction = repair_contract.instruction(report)
+            steps = ['Implement the authoritative repair contract without assuming unresolved prerequisites.',
+                     'Verify every criterion in the authoritative repair contract.',
+                     'Report the repair result separately from remaining package requirements.']
+            instruction += '\n' + roles.role_text('repair-result')
         if experiment:
             instruction += '\nNew observation: ' + report['experiment']['finding'] + '\nEvidence: ' + state['experiment_log']
         if report['kind'] == 'technical':
@@ -162,6 +167,8 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
                      authorization={'class': selected, 'instruction': instruction, 'steps': steps,
                                     'action': follow[1] if follow else None}
                      if report['kind'] == 'technical' else None)
+        if contract:
+            state['authorization'].update(contract=contract, protocol=2)
         if report['kind'] == 'technical':
             state['accepted_scope'] = dict(expected)
         runtime.kv_set(conn, project, _key(plan, package), json.dumps(state))
@@ -172,16 +179,17 @@ def authorization(conn, project, plan, package, current):
     if scope(conn, project, plan, package, current['commit']) != current:
         return None
     state = _load(conn, project, plan, package)
-    return state.get('authorization') if state.get('scope') == current else None
+    grant = state.get('authorization')
+    return grant if state.get('scope') == current and grant and grant.get('protocol') == 2 else None
 
 
-def consume(conn, project, plan, package, current):
+def consume(conn, project, plan, package, current, attempt=''):
     """Consume only after a successful start; no attempt counters are reset."""
     with db.transaction(conn):
         if scope(conn, project, plan, package, current['commit']) != current:
             return False
         state = _load(conn, project, plan, package)
-        if state.get('scope') != current or not state.get('authorization'):
+        if state.get('scope') != current or (state.get('authorization') or {}).get('protocol') != 2:
             return False
         scopes = state.setdefault('consumed_scopes', [])
         basis = {k: current[k] for k in ('commit', 'decisions')}
@@ -190,6 +198,10 @@ def consume(conn, project, plan, package, current):
         action = state['authorization'].get('action')
         if action:
             state.setdefault('repair_actions', []).append(action)
+        contract = state['authorization'].get('contract')
+        if contract:
+            state['assigned'] = {'attempt': attempt, 'id': repair_contract.identity(contract),
+                                 'contract': contract}
         state['authorization'] = None
         runtime.kv_set(conn, project, _key(plan, package), json.dumps(state))
         return True
@@ -203,6 +215,7 @@ def prompt(conn, project, plan, package, commit, output_path, current_class, off
                'not a file path. Retrieve older attempts with --before and complete error detail with --attempt.\n'
                'bzz agent history --project %s --plan %s --package %s\n'
                'bzz decisions list --project %s\n' % tuple(json.dumps(v) for v in (project, plan, package, project)))
+    sources += '\n' + roles.role_text('repair-contract') + '\n'
     previous = _load(conn, project, plan, package).get('report', {})
     if previous:
         sources += '\n' + roles.role_text('package-continuation', {'previous': json.dumps(_digest(previous))}) + '\n'
@@ -215,7 +228,13 @@ def prompt(conn, project, plan, package, commit, output_path, current_class, off
                     'do not prove that objective complete. Reuse applicable findings and narrow the next '
                     'implementation step; repeat diagnosis only to resolve a concrete evidence gap.\n')
     state = _load(conn, project, plan, package)
-    if unchanged_retry(state, current):
+    latest = history.get('attempts', [])
+    progress = state.get('progress', {}).get(latest[0]['attempt']) if latest else None
+    if progress:
+        sources += ('\nThe latest assigned repair step passed every recorded criterion. The package is still open. '
+                    'Do not treat remaining package requirements as failure of that step. Reuse its receipt at '
+                    + progress['result_path'] + '; select the next unresolved prerequisite, preserving the verified work.\n')
+    if unchanged_retry(state, current) and not progress:
         sources += ('\nUNCHANGED CODE AFTER AN AUTHORIZED REPAIR: another history entry, renamed agent, '
                     'paraphrased approach or higher model class is not new evidence. Do not authorize '
                     'the same broad task again. Investigate why the previous repair produced no verified '

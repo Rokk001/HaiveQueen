@@ -551,7 +551,19 @@ def cmd_bee(args, conn):
         refused = bees.release_refusal(conn, args.project, plan, args.package, queen, getattr(args, "ended_evidence", "") or "", args.outcome)
         if refused:   # only trustworthy evidence ends a subagent Bee of an earlier Queen
             return fail(refused)
-        bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error, blocked, force_failure=bool(violation))
+        try:
+            bees.report_attempt(env, plan, args.package, args.cls, args.outcome, args.attempt, requirements, args.error, blocked,
+                               force_failure=bool(violation), repair_result=getattr(args, 'repair_result', ''))
+        except (ValueError, OSError) as exc:
+            return fail(str(exc))
+        from haivequeen import package_diagnosis
+        review = package_diagnosis._load(conn, args.project, plan, args.package)
+        if review.get('phase') in ('pending', 'running', 'owner'):
+            out({'ok': True, 'outcome': 'failed' if violation else args.outcome,
+                 'failures': bees.failure_count(conn, args.project, plan, args.package, args.cls),
+                 'nextAction': 'wait_for_owner' if review['phase'] == 'owner' else 'wait_for_diagnosis',
+                 **(branchguard.failure_fields(violation) if violation else {})})
+            return 0
         next_cls = bees.next_attempt(conn, args.project, plan, args.package, args.cls, bees.escalation_providers(env, plan, args.package),
                                      env.settings.get("excludedProviders", []), int(env.settings.get("escalateAfter", 3)))
         out({"ok": True, "failures": bees.failure_count(conn, args.project, plan, args.package, args.cls), "nextClass": next_cls, **({**branchguard.failure_fields(violation), "outcome": "failed"} if violation else {})})
@@ -626,7 +638,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--paths", default="[]")
     p.add_argument("--rules", default="[]")
     p.add_argument("--cwd", default="", help="legacy option; package worktree is chosen by HaiveQueen")
-    p.add_argument("--outcome", choices=["failed", "interrupted", "succeeded"])
+    p.add_argument("--outcome", choices=["failed", "interrupted", "succeeded", "progress"])
+    p.add_argument("--repair-result", default="", help="progress: JSON evidence for every assigned repair criterion")
     p.add_argument("--attempt", default="", help="result: attempt identity; history: retrieve one complete stored attempt")
     p.add_argument("--before", type=int, default=0, help="history: retrieve attempts before this sequence")
     p.add_argument("--limit", type=int, default=5, help="history: page size, 1..20")

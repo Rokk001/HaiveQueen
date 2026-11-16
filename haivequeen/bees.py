@@ -866,12 +866,35 @@ def escalation_providers(env, plan, package):
 
 
 # Record attempts and require diagnosis before repeating exhausted repairs.
-def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', blocked='', force_failure=False):
+def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirements=None, error='', blocked='', force_failure=False, repair_result=''):
+    with db.transaction(env.conn):
+        return _report_attempt(env, plan, package, cls, outcome, attempt, open_requirements,
+                               error, blocked, force_failure, repair_result)
+
+
+def _report_attempt(env, plan, package, cls, outcome, attempt, open_requirements, error, blocked, force_failure, repair_result):
     """Record an outcome and diagnose repeated failures before another attempt. `blocked` (question:<id>, build, owner, package or provider) means the attempt only waits for that: nothing is counted and the package is set to waiting."""
     attempt, foreign = package_branch_violation(env, plan, package, attempt)
     if foreign:
         from . import branchguard
         outcome, error, blocked, force_failure = 'failed', branchguard.failure_text(foreign), '', True
+    receipt = None
+    if outcome == 'progress':
+        from . import package_diagnosis, repair_contract
+        if blocked or force_failure:
+            raise ValueError('progress cannot be blocked or a forced failure')
+        state = package_diagnosis._load(env.conn, env.name, plan, package)
+        receipt = repair_contract.result(repair_result, state.get('assigned'), attempt,
+                                         package_diagnosis.current_commit(env, plan, package))
+        prior = state.get('progress', {}).get(attempt)
+        if prior:
+            if receipt != prior:
+                raise ValueError('repair progress already recorded with different evidence')
+            return
+        ensure_attempts(env.conn)
+        if env.conn.execute('SELECT 1 FROM bee_attempt_reports WHERE project=? AND plan_path=? AND package=? AND attempt=?',
+                            (env.name, plan, package, attempt)).fetchone():
+            raise ValueError('attempt already reported; progress cannot replace its recorded outcome')
     had_open = bool(unconfirmed_embedded(env.conn, env.name, plan, package))
     if close_embedded(env.conn, env.name, plan, package, 'blocked' if blocked else outcome):   # the embedded Bee of this package has reported
         runtime.append_event(env.conn, env.name, 'The stopped subagent Agent of package %s has ended; its Agent place is free' % package, kind='note', mirror='none')
@@ -882,6 +905,11 @@ def report_attempt(env, plan, package, cls, outcome, attempt=None, open_requirem
         return
     row = next((p for p in env.packages(plan) if p['id'] == package), None)
     record_attempt(env.conn, env.name, plan, package, cls, outcome, attempt, open_requirements, error, row['verify'] if row else 'code', force_failure)
+    if receipt:
+        state.setdefault('progress', {})[attempt] = receipt
+        runtime.kv_set(env.conn, env.name, package_diagnosis._key(plan, package), json.dumps(state))
+        set_package_state(env.conn, env.name, plan, package, 'working', attempt)
+        package_diagnosis.request(env, plan, package, cls)
     if outcome == 'succeeded':
         env.conn.execute('DELETE FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package))
         from . import package_diagnosis
@@ -1229,7 +1257,7 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
         prompt = bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')), roles.language(env.settings))
         prompt += '\n\nAssigned worktree: %s; assigned branch: %s. Use the returned environment for every Git command in this Agent, including commands in other worktrees. Environment: %s' % (cwd, branch, json.dumps(git_environment))
         if review_grant:
-            package_diagnosis.consume(env.conn, env.name, plan, package, review_scope)
+            package_diagnosis.consume(env.conn, env.name, plan, package, review_scope, name)
         return {'kind': 'subagent', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
     if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
         return refuse(env, package, 'an Agent process may not start now (starts paused or stopped, too little free RAM, or no free slot of provider %s)' % provider)
@@ -1246,7 +1274,7 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
     env.conn.execute('INSERT OR IGNORE INTO bee_worktrees VALUES (?,?,?,?)', (env.name, plan, package, str(path.absolute())))
     record_step_count(env.conn, env.name, plan, package, len(steps))
     if review_grant:
-        package_diagnosis.consume(env.conn, env.name, plan, package, review_scope)
+        package_diagnosis.consume(env.conn, env.name, plan, package, review_scope, name)
     return {'kind': 'process', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': str(path.absolute()), 'branch': branch}
 
 

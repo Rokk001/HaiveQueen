@@ -25,6 +25,9 @@ class PackageDiagnosis(RoundCase):
                       analysis='The previous attempt changed the wrong caller.',
                       next_action='Correct the caller and run its regression.',
                       why_new='The actual failing caller has now been identified.')
+        report['contract'] = dict(objective='Correct caller behavior', why_executable='The isolated caller is directly testable.',
+            prerequisites=[], requires=[], resolves=[],
+            criteria=[dict(id='caller', expectation='Caller accepts the argument', check='python -m unittest caller')])
         previous = self.review._load(self.conn, 'testproj', REL, 'P1').get('report')
         if previous:
             latest = bees.attempt_history(self.conn, 'testproj', REL, 'P1', limit=1)['attempts'][0]['attempt']
@@ -235,7 +238,7 @@ class PackageDiagnosis(RoundCase):
         self.review.accept(self.conn, 'testproj', REL, 'P1', path, current, 'medium', ['medium'])
         grant = self.review.authorization(self.conn, 'testproj', REL, 'P1', current)
         self.assertIn('admission-state validation', grant['instruction'])
-        self.assertNotIn(report['next_action'], grant['instruction'])
+        self.assertIn(report['next_action'], grant['instruction'])
         self.assertTrue(self.review.consume(self.conn, 'testproj', REL, 'P1', current))
         self.assertFalse(self.review.consume(self.conn, 'testproj', REL, 'P1', current))
         self.assertEqual(runtime.list_questions(self.conn, 'testproj', status='open'), [])
@@ -411,8 +414,8 @@ class PackageDiagnosisLifecycle(PackageDiagnosis):
         self.assertTrue(result)
         self.assertNotIn('Complete the entire package again', result['prompt'])
         self.assertNotIn('Repeat all investigation', result['prompt'])
-        self.assertIn('Verify: Run the caller regression', result['prompt'])
-        self.assertIn('Why it stopped:', result['prompt'])
+        self.assertIn('Verify every criterion', result['prompt'])
+        self.assertIn('AUTHORITATIVE REPAIR CONTRACT', result['prompt'])
         self.assertIsNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', current))
 
     def test_authorized_package_wakes_without_an_owner_question(self):
