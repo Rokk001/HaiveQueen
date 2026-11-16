@@ -243,7 +243,8 @@ class ReleaseCliProcessTest(RoundCase):
             for phase in ('queen', 'bee'):
                 code = ('import time,sys; from pathlib import Path\n'
                         'while not Path(sys.argv[1]).exists(): time.sleep(.05)')
-                proc = subprocess.Popen([sys.executable, '-c', code, str(self.base / 'finish-agents')], env=env)
+                proc = subprocess.Popen([sys.executable, '-c', code, str(self.base / 'finish-agents')], env=env,
+                                        start_new_session=(os.name != 'nt'))
                 jobs.append(proc)
                 db.add_agent(self.conn, 'testproj', name=phase, phase=phase, status='running', pid=proc.pid)
                 runtime.upsert_agent(self.conn, 'testproj', phase, {'processIdentity': platform.process_identity(proc.pid)})

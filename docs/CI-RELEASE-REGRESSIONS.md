@@ -24,3 +24,20 @@ reservation ownership, detached cancellation and queue replay, version display,
 service launches, and update confirmation in an isolated browser. Process tests
 use temporary data directories and synthetic jobs. They do not operate production
 or implement either optimization plan.
+
+## POSIX process-group ownership
+
+A detached update worker must not signal the shared parent group of a registered
+Agent. A group signal is permitted only when the requested PID is its group
+leader and that group is not the caller's own group. Otherwise termination and
+escalation target only the requested PID. This protects unrelated shell/CI
+processes even when the stopping worker is in another session. Callers needing
+whole-tree termination must launch their job in its own session; release CLI
+fixtures now follow that same launch contract.
+
+Regression tests exercise shared groups from both the same and a separate
+caller group, escalation, owned-group termination and the caller-group guard.
+
+A native POSIX subprocess regression also verifies that a detached stopper
+leaves the victim's shared parent session alive. It runs on Linux CI and is
+skipped on Windows, where the signal-decision tests still exercise both paths.

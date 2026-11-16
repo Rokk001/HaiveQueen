@@ -154,18 +154,18 @@ class TestStubbedBranches(unittest.TestCase):
         sent = []
         alive = iter([True, False])  # alive after SIGTERM check once, then gone
         with mock.patch.object(sys, "platform", "linux"), \
-                mock.patch.object(osplat.os, "getpgid", create=True, return_value=999), \
+                mock.patch.object(osplat.os, "getpgid", create=True, return_value=500), \
                 mock.patch.object(osplat.os, "getpgrp", create=True, return_value=1), \
                 mock.patch.object(osplat.os, "killpg", create=True, side_effect=lambda g, s: sent.append((g, s))), \
                 mock.patch.object(osplat, "_posix_process_alive", side_effect=lambda p: next(alive, False)):
             self.assertTrue(osplat.kill_process_tree(500))
-        self.assertEqual(sent[0], (999, sg.SIGTERM))
+        self.assertEqual(sent[0], (500, sg.SIGTERM))
 
     def test_posix_kill_escalates_to_sigkill(self):
         import signal as sg
         sent = []
         with mock.patch.object(sys, "platform", "linux"), \
-                mock.patch.object(osplat.os, "getpgid", create=True, return_value=999), \
+                mock.patch.object(osplat.os, "getpgid", create=True, return_value=500), \
                 mock.patch.object(osplat.os, "getpgrp", create=True, return_value=1), \
                 mock.patch.object(osplat.os, "killpg", create=True, side_effect=lambda g, s: sent.append(s)), \
                 mock.patch.object(osplat, "_posix_process_alive", return_value=True), \

@@ -425,10 +425,12 @@ def _posix_kill_tree(pid: int, grace: float = 2.0) -> bool:
         pgid = os.getpgid(pid)
     except ProcessLookupError:
         return True
-    group = pgid != os.getpgrp()  # never signal our own group
+    # A detached supervisor can be outside the target's shared parent group.
+    # Different from our group does not mean owned by the target.
+    group = pgid == pid and pgid != os.getpgrp()
 
     def send(sig: int) -> None:
-        """Send a signal to the group, or only to the process when it shares our group."""
+        """Signal an owned group, otherwise only the requested process."""
         if group:
             os.killpg(pgid, sig)
         else:
