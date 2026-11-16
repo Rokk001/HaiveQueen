@@ -1214,3 +1214,16 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 .owner-action-summary{padding:12px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 .owner-action-heading{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;flex:1 1 65%;}
 .owner-action-summary small{font-size:.8rem;}.owner-action-tag{font-size:.85rem;color:#a7bac3;}
+
+/* Queue rows share the dashboard hierarchy; descriptions never dominate it. */
+.queue-list{scrollbar-gutter:auto;}
+.queue-list li{padding:0;}
+.queue-list .queue-plan-link{display:block;width:100%;padding:12px 8px;border-radius:5px;box-sizing:border-box;}
+.queue-list .queue-plan-link:hover{background:#12232a;text-decoration:none;}
+.queue-plan-link:focus-visible{outline:2px solid var(--gold);outline-offset:-2px;}
+.queue-entry-heading{align-items:center;gap:12px;}
+.queue-identity{min-width:0;display:grid;gap:5px;}
+.queue-list .queue-project{margin:0;color:var(--muted);font-size:11px;}
+.queue-name{display:block;color:var(--cyan);font-size:12px;font-weight:600;overflow-wrap:anywhere;}
+.queue-state{flex-shrink:0;border:1px solid var(--edge);border-radius:5px;padding:3px 7px;font-size:10px;}
+.queue-description{display:block;margin-top:7px;color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}

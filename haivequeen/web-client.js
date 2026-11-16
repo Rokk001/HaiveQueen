@@ -1038,10 +1038,14 @@ function mount(document, bootstrap) {
     const queueList=el('ol',undefined,'queue-list');
     for(const item of queueData.items||[]){
       const entry=el('li'),heading=el('div',undefined,'queue-entry-heading');
-      const name=item.title||(item.plan_path||'').split(/[\\/]/).pop()?.replace(/\.md$/i,'')||item.branch||('#'+item.id);
-      const link=button(name,()=>openQueuedPlan(item));link.className='queue-plan-link';link.title=item.plan_path;link.setAttribute('aria-haspopup','dialog');
-      heading.append(link,el('span',t({DRAFT:'Draft',SENT:'Submitted',QUEUED:'Queued'}[item.status]||item.status),'queue-state '+(item.status==='DRAFT'?'dim':'warn')));
-      entry.append(heading,el('small',item.project,'dim'));
+      const name=item.name||(item.plan_path||'').split(/[\\/]/).pop()?.replace(/(?:-PLAN)?\.md$/i,'')||item.branch||item.title||('#'+item.id);
+      const link=button('',()=>openQueuedPlan(item));link.className='queue-plan-link';link.setAttribute('aria-haspopup','dialog');
+      link.setAttribute('aria-label',[item.project||item.apiary,name,item.title].filter(Boolean).join(' · '));
+      const identity=el('div',undefined,'queue-identity');identity.append(el('small',item.project||item.apiary||'', 'queue-project'),el('strong',name,'queue-name'));
+      heading.append(identity,el('span',t({DRAFT:'Draft',SENT:'Submitted',QUEUED:'Queued'}[item.status]||item.status),'queue-state '+(item.status==='DRAFT'?'dim':'warn')));
+      link.append(heading);
+      if(item.title&&item.title!==name)link.append(el('span',item.title,'queue-description'));
+      entry.append(link);
       queueList.append(entry);
     }
     if(!queueList.children.length)queue.append(el('p',t('Queue is empty.'),'dim'));
