@@ -256,3 +256,17 @@ Focused regressions cover descriptive/legacy checkpoint formats, malformed/dupli
 IDs, first-report narrowing, source and decision binding, legacy migration, exclusion
 references, cached independent review, scheduler wait/review/dispatch, and the existing
 real failing-before/passing-after workflow receipt through subsequent repair dispatch.
+
+## Review cache binds the repair proposal
+
+Scope review now fingerprints the requirement scope, full repair contract (including
+prerequisites and verification criteria), and next action. The reviewer receives
+exactly that proposal. A corrected repair with the same complete workflow requires
+a new review; both positive and negative old verdicts are ineligible. Legacy
+workflow-only cache entries are also ineligible. Identical proposals still reuse
+their verdict, and an existing live reviewer is allowed to finish before another
+is started. Attempt history and retry guards remain unchanged.
+
+A focused scheduler regression covers rejection, a corrected behavior and criteria
+with unchanged workflow, fresh review, withheld authorization while pending, and
+dispatch of the corrected repair only after a passing verdict.

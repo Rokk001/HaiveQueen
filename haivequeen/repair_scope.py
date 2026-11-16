@@ -69,12 +69,12 @@ def instruction(reference):
 
 
 def review(env, plan, package, report, cwd, free_mb, alive):
-    """One asynchronous scope review per workflow, reused across repair rounds."""
+    """Review the complete proposal; reuse only an identical reviewed input."""
     from . import agent_process, bees, db, loop, readygate
     ref = reference(env.conn, env.name, plan, package)
     validate(report['contract'], ref)
-    workflow = report['contract']['workflow']
-    fingerprint = repair_contract.identity([ref['id'], workflow])
+    proposal = dict(contract=report['contract'], next_action=report.get('next_action', ''))
+    fingerprint = repair_contract.identity(['repair-proposal-v2', ref['id'], proposal])
     key = 'repair-workflow-review:' + json.dumps([plan, package], separators=(',', ':'))
     record = json.loads(runtime.kv_get(env.conn, env.name, key) or '{}')
     if record.get('agent'):
@@ -93,11 +93,12 @@ def review(env, plan, package, report, cwd, free_mb, alive):
     prompt = ('Review this proposed repair workflow, not implementation completion. Read only the '
               'referenced requirements, applicable decisions and relevant entrypoint. Do its checkpoints '
               'cover the whole required product execution, including success and required failure/recovery? '
+              'Also assess whether the selected repair advances this workflow using its criteria and prerequisites. '
               'Reject a helper or prerequisite presented as the whole workflow, even when coverage lists '
               'every requirement. Respect superseding decisions and already accepted work. Do not repair '
               'code or run product processes. End with READY-CHECK: PASSED or READY-CHECK: FAILED, followed '
               'by a concrete missing execution boundary and requirement ID if failed.\n'
-              + instruction(ref) + '\nProposed workflow: ' + json.dumps(workflow, ensure_ascii=False)
+              + instruction(ref) + '\nProposed repair and complete workflow: ' + json.dumps(proposal, ensure_ascii=False)
               + '\nDecisions: bzz decisions list --project ' + json.dumps(env.name))
     request = dict(plan=plan, cwd=str(cwd), prompt=prompt, package='WORKFLOW-CHECK:' + package)
     with db.transaction(env.conn):

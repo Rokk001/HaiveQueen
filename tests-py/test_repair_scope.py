@@ -166,6 +166,65 @@ class RepairScope(RoundCase):
         self.assertEqual(assigned['contract']['workflow']['scope'], scope['requirements'])
         self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'medium'), 1)
 
+    def test_each_reviewed_input_invalidates_cached_success(self):
+        _, report = self.report()
+        with mock.patch('haivequeen.readygate._launch_check_agent', return_value=('scope-check', '')) as launch:
+            self.review(report)
+            self.agent('scope-check', phase='verify', status='done')
+            folder = self.env().run_dir('scope-check'); folder.mkdir(parents=True, exist_ok=True)
+            (folder / 'final.txt').write_text('READY-CHECK: PASSED')
+            self.assertEqual(self.review(report)[0], 'passed')
+            key = 'repair-workflow-review:' + json.dumps([REL, 'P1'], separators=(',', ':'))
+            cached = runtime.kv_get(self.conn, 'testproj', key)
+            for field in ('behavior', 'criteria', 'prerequisites', 'action'):
+                with self.subTest(field=field):
+                    runtime.kv_set(self.conn, 'testproj', key, cached)
+                    changed = copy.deepcopy(report)
+                    if field == 'behavior': changed['contract']['repair']['behavior'] += ' with adoption'
+                    elif field == 'criteria': changed['contract']['criteria'][0]['expectation'] += ' through worker'
+                    elif field == 'prerequisites': changed['contract']['prerequisites'][0]['reason'] += ' newly observed'
+                    else: changed['next_action'] += ' through public entrypoint'
+                    self.assertEqual(self.review(changed)[0], 'pending')
+            legacy = json.loads(cached)
+            legacy['fingerprint'] = repair_contract.identity([report['contract']['workflow']['scope'], report['contract']['workflow']])
+            runtime.kv_set(self.conn, 'testproj', key, json.dumps(legacy))
+            self.assertEqual(self.review(report)[0], 'pending')
+
+    def test_rejected_repair_correction_is_reviewed_before_dispatch(self):
+        scope, report = self.report()
+        with mock.patch('haivequeen.readygate._launch_check_agent', side_effect=[('old-review', ''), ('new-review', '')]) as launch:
+            self.assertEqual(self.review(report)[0], 'pending')
+            self.agent('old-review', phase='verify', status='done')
+            folder = self.env().run_dir('old-review'); folder.mkdir(parents=True, exist_ok=True)
+            (folder / 'final.txt').write_text('READY-CHECK: FAILED Status-only repair does not activate.')
+            self.assertEqual(self.review(report)[0], 'failed')
+            corrected = copy.deepcopy(report)
+            corrected['next_action'] = 'Connect compatibility to activation and adoption.'
+            corrected['contract']['repair']['behavior'] = 'Activate a compatible release and adopt existing work'
+            corrected['contract']['criteria'][0]['expectation'] = 'Compatible release activates through the worker'
+            self.assertEqual(corrected['contract']['workflow'], report['contract']['workflow'])
+            folder = self.env().run_dir('corrector'); folder.mkdir(parents=True, exist_ok=True)
+            path = folder / 'package-diagnosis.json'; path.write_text(json.dumps(corrected))
+            self.agent('corrector', phase='fix', status='done')
+            runtime.kv_set(self.conn, 'testproj', diagnosis._key(REL, 'P1'), json.dumps(dict(
+                phase='running', agent='corrector', scope=scope, current_class='medium', report_path=str(path.resolve()))))
+            with mock.patch('haivequeen.package_diagnosis.current_commit', return_value='head-1'):
+                diagnosis.advance(self.env(), 8192, alive=lambda pid: False)
+                self.assertEqual(launch.call_count, 2)
+                self.assertIsNone(diagnosis.authorization(self.conn, 'testproj', REL, 'P1', scope))
+                prompt = launch.call_args.args[2]['prompt']
+                self.assertIn(corrected['next_action'], prompt)
+                self.assertIn(corrected['contract']['repair']['behavior'], prompt)
+                self.agent('new-review', phase='verify', status='done')
+                folder = self.env().run_dir('new-review'); folder.mkdir(parents=True, exist_ok=True)
+                (folder / 'final.txt').write_text('READY-CHECK: PASSED')
+                diagnosis.advance(self.env(), 8192, alive=lambda pid: False)
+            self.assertIsNotNone(diagnosis.authorization(self.conn, 'testproj', REL, 'P1', scope))
+            self.assertTrue(self.start('corrected-repair'))
+            assigned = diagnosis._load(self.conn, 'testproj', REL, 'P1')['assigned']
+            self.assertEqual(assigned['contract'], corrected['contract'])
+            self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'medium'), 1)
+
     def test_active_decision_can_exclude_requirement_but_invented_decision_cannot(self):
         decision = runtime.add_decision(self.conn, 'testproj', 'owner', 'R2 is set aside.', plan=REL)
         scope, report = self.report()
