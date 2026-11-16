@@ -231,7 +231,13 @@ class QueenIntegrationTests(RoundCase):
                   'reviewed_decisions': [], 'evidence': ['caller.py:10 incorrect argument'],
                   'analysis': 'The wrong caller was repaired.', 'next_action': 'Fix the actual caller.',
                   'why_new': 'The actual failing caller is now identified.', 'repair_class': selected,
-                  'class_reason': 'The repair spans multiple interfaces.'}
+                  'class_reason': 'The repair spans multiple interfaces.',
+                  'contract': {'objective': 'Fix the incorrect caller argument.',
+                               'why_executable': 'The isolated caller can be tested without other packages.',
+                               'prerequisites': [], 'requires': [], 'resolves': [],
+                               'criteria': [{'id': 'caller-argument',
+                                             'expectation': 'The caller passes the expected argument.',
+                                             'check': 'python -m unittest test_caller_argument'}]}}
         path = self.base / 'diagnosis.json'
         path.write_text(json.dumps(report), encoding='utf-8')
         review.accept(self.conn, 'testproj', REL, 'P1', path, scope, current, ['light', 'medium', 'heavy'])
