@@ -84,6 +84,22 @@ def connect(path) -> sqlite3.Connection:
     deadline = time.monotonic() + BUSY_TIMEOUT_MS / 1000
     while True:
         try:
+            current = conn.execute('PRAGMA user_version').fetchone()[0]
+            if current > SCHEMA_VERSION:
+                conn.close()
+                raise RuntimeError('newer database schema requires the active HQ version')
+            if current < SCHEMA_VERSION:
+                code = Path(__file__).resolve().parent.parent
+                if code.parent.name == 'versions':
+                    from . import config
+                    if p.resolve() == Path(config.db_path()).resolve():
+                        try:
+                            active = (code.parent.parent / 'active-version').read_text(encoding='utf-8').strip()
+                        except OSError:
+                            active = None
+                        if active != code.name:
+                            conn.close()
+                            raise RuntimeError('inactive HQ version cannot migrate the shared database')
             conn.execute("PRAGMA journal_mode = WAL")
             migrate(conn)
             return conn

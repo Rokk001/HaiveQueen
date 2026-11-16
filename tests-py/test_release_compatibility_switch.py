@@ -5,7 +5,7 @@ import unittest
 
 import isolation  # noqa: F401
 from haivequeen import release_staging, version_layout
-from release_authority_fixture import authority, package_files, responses
+from release_authority_fixture import authority, package_files, responses, database_break
 
 
 class VerifiedCompatibilityTests(unittest.TestCase):
@@ -107,3 +107,35 @@ class VerifiedCompatibilityTests(unittest.TestCase):
         self.assertTrue(self.assess()['compatible'])
         cache.write_bytes(cache.read_bytes()[:16] + b'forged')
         self.assertFalse(self.assess()['compatible'])
+
+    def test_authenticated_database_consumer_break_is_known_incompatible(self):
+        self.target = database_break(self.target)
+        self.install()
+        result = self.assess()
+        self.assertTrue(result['known'], result)
+        self.assertFalse(result['compatible'], result)
+        self.assertIn('providers_usage.actions becomes actions_json', result['reason'])
+        self.assertEqual(result['affected_versions'], ['1.0.0'])
+
+    def test_declared_database_break_without_migration_is_unknown(self):
+        self.target['haivequeen/shared-contract.json'] = b'{"format":1,"database":"usage-actions-json-v2"}\n'
+        self.install()
+        self.assertFalse(self.assess()['known'])
+
+    def test_database_migration_with_missing_support_is_unknown(self):
+        self.target = database_break(self.target)
+        self.target.pop('haivequeen/shared-contract.json')
+        self.install()
+        self.assertFalse(self.assess()['known'])
+
+    def test_unmodeled_consumer_or_schema_change_is_unknown(self):
+        self.target = database_break(self.target)
+        self.target['haivequeen/runtime.py'] += b'\nUNKNOWN_CONSUMER = True\n'
+        self.install()
+        self.assertFalse(self.assess()['known'])
+
+    def test_database_break_requires_actual_schema_and_consumers(self):
+        self.target = database_break(self.target)
+        self.target['schema.sql'] = self.old['schema.sql']
+        self.install()
+        self.assertFalse(self.assess()['known'])

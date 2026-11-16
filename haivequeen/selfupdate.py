@@ -381,11 +381,27 @@ def write_release_status(status):
     os.replace(temp, path)
 
 
+def start_release_core(root):
+    """Await the start command, without waiting for detached pipe writers.
+
+    Windows process supervisors may retain a redirected pipe in a detached
+    successor. File capture preserves the command exit check while allowing
+    the worker to verify that successor's actual completed-round receipt.
+    """
+    import tempfile
+    root = Path(root)
+    with tempfile.TemporaryFile(mode='w+', encoding='utf-8') as output:
+        result = subprocess.run([osplat.python_executable(), '-I', str(root / 'launcher.py'),
+                                 'start', '--keep-pause'], cwd=root, stdin=subprocess.DEVNULL,
+                                stdout=output, stderr=subprocess.STDOUT)
+    return result.returncode == 0
+
+
 def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
                        timeout=ROUND_TIMEOUT, stage=None, jobs=None,
                        activate=None, receipt=None, start=None, loop_pid=None):
     """Stage and switch an immutable release; retain running work when compatible."""
-    from . import release_activation, release_compat, release_contract, release_staging, updates, version_layout
+    from . import release_activation, release_compat, release_contract, release_staging, updates, version_layout, version_leases
     from .stable_launcher import lifetime_lock
     root = Path(root)
     default_stage = stage is None
@@ -394,13 +410,14 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
     activate = activate or release_activation.activate
     receipt = receipt or wait_successor_round
     loop_pid = loop_pid or loop.loop_running
-    start = start or (lambda: run_command([osplat.python_executable(), '-I', str(root / 'launcher.py'),
-                                           'start', '--keep-pause'], root)[0] == 0)
+    start = start or (lambda: start_release_core(root))
     holder = loop._take_pid_lock(release_lock_path(), own_ok=False, wait=0.5)
     if holder:
         return {'result': 'locked', 'note': 'another release update runs', 'old': '', 'new': ''}
     old = ''
     row = None
+    resume_after = False
+    installations = {}
     try:
         old = (root / 'active-version').read_text(encoding='utf-8').strip()
         row = start_row(conn, old)
@@ -426,15 +443,34 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
         else:
             with lifetime_lock(root):
                 info = release_contract.assess(root, version, old, authority)
+                installations = {k: v for k, v in version_leases._load(root).items() if v.get('installation') is True}
         if not info['known']:
             note = 'update deferred: ' + info['reason']
             end_row(conn, row, old, 'failed', note)
             return {'result': 'deferred', 'note': note, 'old': old, 'new': old}
         if not info['compatible']:
+            columns = {r[1] for r in conn.execute('PRAGMA table_info(providers_usage)')}
+            if conn.execute('PRAGMA user_version').fetchone()[0] != 17 or 'actions' not in columns or 'actions_json' in columns:
+                note = 'update deferred: unsupported current database contract'
+                end_row(conn, row, old, 'failed', note)
+                return {'result': 'deferred', 'note': note, 'old': old, 'new': old}
+            resume_after = runstate.starts_allowed(conn)
             status = release_compat.begin_wait(conn, target, jobs=jobs, decision=info)
+            # STOP excludes new work while old work completes. The pause also
+            # holds new starts after the successor clears STOP, until its first
+            # round has proved successful (or recovery has proved the old one).
+            runstate.pause(conn, 'incompatible release verification')
             while True:
                 status['jobs'] = jobs(conn)
                 status['waiting'] = bool(status['jobs'] or loop_pid())
+                if not status['waiting']:
+                    # Core drain leaves the waiting interface available. Once
+                    # all work has finished, close it gracefully as well; the
+                    # stopped-core tray exits when its web service disappears.
+                    from . import web_service
+                    web_service.stop()
+                    with lifetime_lock(root):
+                        status['waiting'] = not release_contract.drained(root, installations, installation_token)
                 write_release_status(status)
                 if release_force_path().exists():
                     from . import force_stop
@@ -461,6 +497,32 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
             # The old reservation stays held during this callback. A successor
             # must relinquish the core lock itself; never kill a foreign process.
             deadline = time.monotonic() + timeout
+            if not info['compatible']:
+                # Never reverse shared schema while a target core can use it.
+                # Target STOP also suppresses automatic pointer-driven restart.
+                loop.stop_flag().write_text('stop requested %s (self-update database recovery)\n' % db.now(), encoding='utf-8')
+                while loop_pid() and time.monotonic() < deadline:
+                    sleep(poll)
+                if loop_pid():
+                    return
+                from . import web_service
+                web_service.stop()
+                restored = False
+                while time.monotonic() < deadline:
+                    # Keep the final lease check and reverse DDL atomic with
+                    # supported launches. Take the data lock first, matching
+                    # coordinated HQ callers; restore_database is reentrant.
+                    with db.filetxn.locked(), lifetime_lock(root):
+                        target_users = [r for r in version_leases._load(root).values()
+                                        if r.get('version') == version and not r.get('installation')
+                                        and (not r.get('pid') or not release_contract.process_ended(r['pid']))]
+                        if not target_users:
+                            release_contract.restore_database(conn)
+                            restored = True
+                            break
+                    sleep(poll)
+                if not restored:
+                    return
             began_old = db.now()
             old_path = version_layout.version_dir(root, old_version)
             while loop_pid() and time.monotonic() < deadline:
@@ -475,9 +537,24 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
                                        sleep, poll, timeout, loop_pid=loop_pid)
         if not release_staging.verify_installed(target, repository, version):
             raise RuntimeError('installed release changed before activation')
+        def can_publish():
+            current = release_contract.assess(root, version, old, authority)
+            if not current['known'] or current['evidence'] != info['evidence']:
+                return False
+            if info['compatible']:
+                return current['compatible'] is True
+            columns = {r[1] for r in conn.execute('PRAGMA table_info(providers_usage)')}
+            return (current['compatible'] is False and current['reason'] == info['reason']
+                    and loop.stop_flag().exists() and not owner_stopped()
+                    and not runstate.starts_allowed(conn) and not jobs(conn) and not loop_pid()
+                    and conn.execute('PRAGMA user_version').fetchone()[0] == 17
+                    and 'actions' in columns and 'actions_json' not in columns
+                    and release_contract.drained(root, installations, installation_token))
         passed = activate(root, version, first_round, after_rollback=recover_old,
                           installation_token=installation_token,
-                          target_verifier=lambda: release_contract.assess(root, version, old, authority)['compatible'])
+                          target_verifier=can_publish)
+        if resume_after and (passed or recovered[0]):
+            runstate.resume(conn, 'release first round verified')
         if passed:
             result, note = 'ok', 'updated to version ' + version
         else:

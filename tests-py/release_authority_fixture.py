@@ -48,8 +48,33 @@ def responses(versions):
 def package_files(source):
     source = Path(source)
     files = {'pyproject.toml': (source / 'pyproject.toml').read_bytes()}
+    files['schema.sql'] = (source / 'schema.sql').read_bytes()
     for folder in ('haivequeen', 'roles'):
         for path in (source / folder).rglob('*'):
             if path.is_file() and '__pycache__' not in path.parts and path.suffix != '.pyc':
                 files[path.relative_to(source).as_posix()] = path.read_bytes()
+    return files
+
+
+def database_break(files):
+    """A real schema/consumer rename, not a compatibility boolean."""
+    files = dict(files)
+    files['haivequeen/shared-contract.json'] = b'{"format":1,"database":"usage-actions-json-v2"}\n'
+    changes = {
+        'haivequeen/db.py': [
+            ('SCHEMA_VERSION = 17', 'SCHEMA_VERSION = 18'),
+            ('("providers_usage", "actions", "TEXT")', '("providers_usage", "actions_json", "TEXT")'),
+            ('    if version < SCHEMA_VERSION:\n', '    if version == 17:\n        conn.execute("ALTER TABLE providers_usage RENAME COLUMN actions TO actions_json")\n    if version < SCHEMA_VERSION:\n')],
+        'haivequeen/runtime.py': [
+            ('"duration_s", "actions", "error"]', '"duration_s", "actions_json", "error"]\n    f["actions_json"] = f.get("actions")'),
+            ('sql, args = "SELECT * FROM providers_usage WHERE 1=1", []', 'sql, args = "SELECT *, actions_json AS actions FROM providers_usage WHERE 1=1", []')],
+        'haivequeen/legacy.py': [('"context, duration_s, actions, error) VALUES', '"context, duration_s, actions_json, error) VALUES')],
+        'schema.sql': [('    actions TEXT,', '    actions_json TEXT,')],
+    }
+    for name, replacements in changes.items():
+        text = files[name].decode().replace('\r\n', '\n')
+        for old, new in replacements:
+            assert text.count(old) == 1, (name, old)
+            text = text.replace(old, new)
+        files[name] = text.encode()
     return files

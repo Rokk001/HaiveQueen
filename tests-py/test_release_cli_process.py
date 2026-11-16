@@ -55,7 +55,8 @@ class ReleaseCliProcessTest(RoundCase):
         self._compatible_switch(public=True, rollback=True)
 
     def test_incompatible_public_install_waits_for_jobs_then_switches(self):
-        self._compatible_switch(public=True, incompatible=True)
+        self._compatible_switch(public=True, download=True, incompatible=True, database=True, adoption=True, resume=True,
+                                reason="Database column providers_usage.actions becomes actions_json; older HQ usage writers require actions (affected versions: 1.0.0)")
 
     def test_web_api_install_and_force_reach_worker(self):
         self._compatible_switch(public=True, incompatible=True, force=True, web=True)
@@ -120,7 +121,7 @@ class ReleaseCliProcessTest(RoundCase):
             log.close()
 
     def _compatible_switch(self, public, download=False, rollback=False, incompatible=False, force=False,
-                           reason="shared schema change", adoption=False, launched=False, scheduling=False, resume=False, web=False):
+                           reason="shared schema change", adoption=False, launched=False, scheduling=False, resume=False, web=False, database=False):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
         for version in (('1.0.0',) if download else ('1.0.0', '2.0.0')):
@@ -131,7 +132,7 @@ class ReleaseCliProcessTest(RoundCase):
         server = None
         requests = []
         if download:
-            from release_authority_fixture import authority, responses, package_files
+            from release_authority_fixture import authority, responses, package_files, database_break
             from haivequeen import release_staging
             reply = {}
             class ReleaseHandler(BaseHTTPRequestHandler):
@@ -158,9 +159,13 @@ class ReleaseCliProcessTest(RoundCase):
                 b'poll=5.0,\n                       timeout=ROUND_TIMEOUT',
                 b'poll=0.1,\n                       timeout=ROUND_TIMEOUT')
             files['haivequeen/release_message.py'] = b'MESSAGE = "old application message"\n'
+            if database:
+                files['haivequeen/shared-contract.json'] = b'{"format":1,"database":"usage-actions-v1"}\n'
             old_authority = authority(files, '1.0.0')
             files = dict(files)
             files['haivequeen/release_message.py'] = b'MESSAGE = "new application message"\n'
+            if database:
+                files = database_break(files)
             target_authority = authority(files, '2.0.0')
             reply.update(responses({'1.0.0': old_authority, '2.0.0': target_authority}))
             shutil.rmtree(root / 'versions' / '1.0.0')
@@ -339,7 +344,21 @@ class ReleaseCliProcessTest(RoundCase):
                 else:
                     command = [sys.executable, '-I', str(root / 'launcher.py'), 'update', '--install', '2.0.0']
                 if web != 'browser':
-                    request = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
+                    if database:
+                        # Detached descendants can retain inherited pipe
+                        # writers. Await the request process with the same
+                        # deadline and capture its exact output in owned files,
+                        # without waiting for unrelated pipe EOF.
+                        import tempfile
+                        with tempfile.TemporaryFile(mode='w+', encoding='utf-8') as out, tempfile.TemporaryFile(mode='w+', encoding='utf-8') as err:
+                            completed = subprocess.run(command, env=env, stdout=out, stderr=err,
+                                                       text=True, timeout=30)
+                            out.seek(0)
+                            err.seek(0)
+                            request = subprocess.CompletedProcess(command, completed.returncode,
+                                                                  out.read(), err.read())
+                    else:
+                        request = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
                     self.assertEqual(request.returncode, 0, request.stdout + request.stderr)
                 if web == 'browser':
                     pass
@@ -360,25 +379,39 @@ class ReleaseCliProcessTest(RoundCase):
                     while time.monotonic() < deadline:
                         try:
                             status = json.loads(selfupdate.release_status_path().read_text(encoding='utf-8'))
-                            if status['waiting'] and len(status['jobs']) >= (4 if force else 2):
+                            if status['waiting'] and len(status['jobs']) >= (4 if force or database else 2):
                                 break
                         except (OSError, ValueError):
                             pass
+                        ended = db.last_self_update(self.conn)
+                        if database and ended and ended['ended']:
+                            self.assertNotEqual(ended['result'], 'failed', str(dict(ended)))
                         time.sleep(.05)
                     self.assertTrue(status and status['waiting'], str(status))
                     self.assertEqual(status['reason'], reason)
                     self.assertEqual({j['kind'] for j in status['jobs']},
-                                     {'Queen', 'Agent', 'Build', 'Deploy'} if force else {'Queen', 'Agent'})
+                                     {'Queen', 'Agent', 'Build', 'Deploy'} if force or database else {'Queen', 'Agent'})
                     self.assertEqual((root / 'active-version').read_text().strip(), '1.0.0')
                     self.assertTrue(loop.stop_flag().exists())
                     self.assertTrue(all(job.poll() is None for job in jobs))
+                    if database:
+                        self.assertEqual(self.conn.execute('PRAGMA user_version').fetchone()[0], 17)
+                        self.assertIn('actions', [r[1] for r in self.conn.execute('PRAGMA table_info(providers_usage)')])
+                        self.assertEqual(hives.start_block_reason(self.conn, 'testproj'), 'stopped')
+                        from haivequeen import web_api
+                        waiting = web_api.execute(self.conn, 'updates', {})['waiting']
+                        self.assertEqual(waiting['reason'], reason)
+                        self.assertEqual({j['kind'] for j in waiting['jobs']}, {'Queen', 'Agent', 'Build', 'Deploy'})
+                        client = (source / 'haivequeen/web-client.js').read_text(encoding='utf-8')
+                        self.assertIn('box.title=[updateState.waiting.reason', client)
+                        self.assertIn('updateState.waiting.jobs', client)
                     query = subprocess.run([sys.executable, '-I', str(root / 'launcher.py'), 'update'],
                                            env=env, capture_output=True, text=True, timeout=30)
                     reported = json.loads(query.stdout)
                     self.assertTrue(reported['waiting'])
                     self.assertEqual(reported['reason'], status['reason'])
                     self.assertEqual({j['kind'] for j in reported['jobs']},
-                                     {'Queen', 'Agent', 'Build', 'Deploy'} if force else {'Queen', 'Agent'})
+                                     {'Queen', 'Agent', 'Build', 'Deploy'} if force or database else {'Queen', 'Agent'})
                     self.assertTrue(all(job.poll() is None for job in jobs))
                     if force:
                         if web == 'tray':
@@ -406,6 +439,8 @@ class ReleaseCliProcessTest(RoundCase):
                             self.assertTrue(json.loads(forced.stdout.splitlines()[-1])['force_requested'])
                     else:
                         (self.base / 'finish-agents').touch()
+                        if database:
+                            (self.base / 'release-runners').touch()
                     for job in jobs:
                         job.wait(timeout=30)
                     for job, _, finish, _ in detached:
@@ -450,6 +485,14 @@ class ReleaseCliProcessTest(RoundCase):
             self.assertEqual(receipt['pid'], new_pid)
             self.assertEqual(receipt['identity'], platform.process_identity(new_pid))
             self.assertEqual(Path(receipt['code_path']), root / 'versions' / ('1.0.0' if rollback else '2.0.0'))
+            if database:
+                self.assertEqual(self.conn.execute('PRAGMA user_version').fetchone()[0], 18)
+                columns = [r[1] for r in self.conn.execute('PRAGMA table_info(providers_usage)')]
+                self.assertIn('actions_json', columns)
+                self.assertNotIn('actions', columns)
+                import sqlite3
+                with self.assertRaises(sqlite3.OperationalError):
+                    runtime.usage_add(self.conn, actions='old writer')
             if rollback:
                 self.assertIn('rolled back', row['note'])
                 fault = json.loads(runtime.kv_get(self.conn, scheduler.GLOBAL, 'global-fault:self_update_rollback'))
@@ -579,6 +622,19 @@ class ReleaseCliProcessTest(RoundCase):
                 time.sleep(.05)
             if core is not None:
                 core.wait(timeout=10)
+            # Await only the test-owned successor's inherited log handle.
+            deadline = time.monotonic() + 30
+            core_log = platform.runs_dir() / 'beekeeper.log'
+            while core_log.exists():
+                try:
+                    probe = core_log.with_suffix('.closed')
+                    core_log.rename(probe)
+                    probe.rename(core_log)
+                    break
+                except PermissionError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(.05)
             # A core can return before its independently spawned web service
             # publishes its control endpoint. Stop that owned service once it
             # is reachable and wait for its inherited log handle to close.
