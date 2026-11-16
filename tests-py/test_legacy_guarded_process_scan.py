@@ -22,6 +22,8 @@ class GuardedScanTests(unittest.TestCase):
         self.versions.mkdir()
         (self.versions / 'v1').mkdir()
         (self.versions / 'v2').mkdir()
+        self.pointer = self.root / 'active-version'
+        self.pointer.write_text('v1\n', encoding='utf-8')
 
     def reader(self):
         return subprocess.run([sys.executable, '-c',
@@ -42,6 +44,36 @@ class GuardedScanTests(unittest.TestCase):
                         raise
                 self.assertEqual(self.registry.read_bytes(), self.data)
                 self.assertEqual(self.reader(), 0)
+
+    def test_active_pointer_must_name_a_clear_scanned_directory(self):
+        for contents in (None, '', '../v1', 'missing'):
+            with self.subTest(contents=contents):
+                if contents is None:
+                    self.pointer.unlink(missing_ok=True)
+                else:
+                    self.pointer.write_text(contents, encoding='utf-8')
+                with mock.patch.object(version_leases.process_scan, 'scan', return_value=False):
+                    with self.assertRaises((OSError, ValueError)):
+                        with version_leases.guarded_process_scan(self.root):
+                            self.fail('invalid active pointer admitted')
+                self.assertEqual(self.registry.read_bytes(), self.data)
+                self.assertEqual(self.reader(), 0)
+                with version_leases.lifetime_lock(self.root):
+                    pass
+        self.pointer.write_text('v1', encoding='utf-8')
+        original = Path.read_text
+        def denied(path, *args, **kwargs):
+            if path == self.pointer:
+                raise PermissionError('denied')
+            return original(path, *args, **kwargs)
+        with mock.patch.object(Path, 'read_text', denied), mock.patch.object(version_leases.process_scan, 'scan', return_value=False):
+            with self.assertRaises(PermissionError):
+                with version_leases.guarded_process_scan(self.root):
+                    self.fail('inaccessible active pointer admitted')
+        self.assertEqual(self.registry.read_bytes(), self.data)
+        self.assertEqual(self.reader(), 0)
+        with version_leases.lifetime_lock(self.root):
+            pass
 
     def test_observed_unknown_and_exceptional_scans_refuse(self):
         for result in (True, None, 0):

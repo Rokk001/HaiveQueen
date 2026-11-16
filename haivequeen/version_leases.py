@@ -104,16 +104,22 @@ def guarded_process_scan(root):
     with lifetime_lock(root), exclusive_empty_registry(root):
         versions = root / 'versions'
         validate_directory(versions.lstat())
+        active = _version((root / 'active-version').read_text(encoding='utf-8').strip())
         with os.scandir(versions) as entries:
             found = False
+            active_found = False
             for entry in entries:
                 found = True
                 _version(entry.name)
                 validate_directory(entry.stat(follow_symlinks=False))
                 if process_scan.scan(Path(entry.path)) is not False:
                     raise ValueError('version process scan is not clear')
+                if entry.name == active:
+                    active_found = True
             if not found:
                 raise ValueError('no version directories')
+            if not active_found:
+                raise ValueError('active version is not installed')
         yield
 
 
