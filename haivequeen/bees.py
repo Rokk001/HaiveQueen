@@ -1127,6 +1127,9 @@ def drain_refusal(draining=None):
 
 
 # Start a separate Bee process after validating context, memory, slots and routing.
+BLOCKING_SUBAGENT_PROTOCOLS = {'claude'}   # protocols whose native subagent call returns only with the result
+
+
 def start_process(env, plan, package, name, cls, task, steps, paths, rules, cwd=None, no_subagents=False):
     """Start an eligible Agent through the agent runner. Every package goes to an Agent, the Queen never works one herself; the provider setting beeMode decides whether
     the Agent of the Queen's own provider is an embedded subagent or a separate process.
@@ -1255,7 +1258,10 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
         if scheduler.class_index(cls) != scheduler.class_index(current) and not (current == base_class and scheduler.class_index(cls) == scheduler.class_index(requested_class)):
             return refuse(env, package, 'class %s was requested but the system computes class %s (plan class %s, no stored escalation)' % (cls, current, requested_class))
     queen_provider = scheduler.get_provider(env.providers, hive['provider'])
-    embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not no_subagents)   # the Queen's provider runs her Bees as embedded subagents
+    # Embedded only where the native subagent call blocks until the result: elsewhere the Queen would
+    # poll it, and every poll is a model turn over her whole context. Those Agents run as processes.
+    embedded = bool(queen_provider and queen_provider.get('beeMode') == 'subagent' and not no_subagents
+                    and queen_provider.get('protocol') in BLOCKING_SUBAGENT_PROTOCOLS)
     free = scheduler.provider_free(env.providers, running, env.conn)   # A subagent Bee needs a free slot of the Queen's provider like a Bee process
     route_free = dict(free)
     limited = [p['name'] for p in env.providers if scheduler.reserve_zero(p, env.conn)]   # a used-up window (reserve 0) blocks the provider

@@ -48,10 +48,11 @@ class BeeDependencies(RoundCase):
             self.assertEqual(json.loads(output)['kind'], 'process')
             process.assert_called_once()
             self.assertEqual(bees.open_embedded_names(self.conn), set())
+            # A Codex Queen would poll a native subagent, so it gets a process Agent even with --subagents.
             code, output = self.start('P1', ('--subagents',))
             self.assertEqual(code, 0, output)
-            self.assertEqual(json.loads(output)['kind'], 'subagent')
-            self.assertEqual(len(bees.open_embedded_names(self.conn)), 1)
+            self.assertEqual(json.loads(output)['kind'], 'process')
+            self.assertEqual(bees.open_embedded_names(self.conn), set())
             self.assertEqual(self.machine['providers'][0]['beeMode'], 'subagent')
 
     def test_queen_prompt_negotiates_available_tools_without_cli_names(self):

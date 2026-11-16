@@ -222,6 +222,22 @@ class SubagentRulesTest(RoundCase):
         self.assertEqual(self.conn.execute("SELECT steps FROM bee_step_counts WHERE package='P1'").fetchone()[0], 3)
         self.assertEqual(self.conn.execute("SELECT state FROM package_progress WHERE package='P1'").fetchone()[0], "working")
 
+    # A Queen whose native subagent call does not block would poll it: her Agents run as processes.
+    def test_codex_queen_with_subagent_mode_gets_a_process_agent(self):
+        """Every poll of an embedded subagent is a full model turn of the Queen, so only blocking protocols embed."""
+        self.conn.execute("UPDATE hives SET provider='codex' WHERE project='testproj'")
+        self.conn.execute("UPDATE agents SET provider='codex' WHERE name='queen'")
+        self.machine['providers'][1]['beeMode'] = 'subagent'
+        self.machine['providers'][0]['beeMode'] = 'subagent'
+        with mock.patch('haivequeen.loop._do_start', return_value=True),                 mock.patch('haivequeen.loop.ram_gb', return_value=16.0),                 mock.patch('haivequeen.bees.select_route', return_value=('codex', 'medium')):
+            out = self.start()
+        self.assertEqual(out['kind'], 'process')
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM embedded_bees").fetchone()[0], 0)
+
+    def test_queen_role_tells_to_hand_off_instead_of_waiting_for_process_agents(self):
+        text = (Path(__file__).resolve().parent.parent / "roles" / "queen.md").read_text(encoding="utf-8")
+        self.assertIn("do not wait for it or check on it", text)
+
     # The Queen is told to hand the prompt on.
     def test_queen_role_tells_to_use_the_returned_prompt(self):
         """The Queen's role text says that the subagent gets the returned prompt."""
