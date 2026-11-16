@@ -98,7 +98,7 @@ def continuation(conn, project, plan, package, state, report, selected):
         raise ValueError('continuation must review the last accepted diagnosis and latest repair attempt')
     if follow.get('outcome') not in ('no_progress', 'partial', 'step_complete'):
         raise ValueError('continuation must distinguish no_progress, partial and step_complete')
-    if follow.get('outcome') == 'step_complete' and not state.get('progress', {}).get(follow['attempt']):
+    if follow.get('outcome') == 'step_complete' and not (state.get('progress', {}).get(follow['attempt']) or {}).get('implementation'):
         raise ValueError('step_complete requires a verified repair receipt')
     for field in ('reason', 'target', 'change', 'verification'):
         if not isinstance(follow.get(field), str) or not follow[field].strip():
@@ -136,7 +136,7 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
         experiment = None
         latest = bees.attempt_history(conn, project, plan, package, limit=1)['attempts']
         progress = state.get('progress', {}).get(latest[0]['attempt']) if latest else None
-        verified_progress = progress and progress.get('commit') == expected['commit']
+        verified_progress = progress and progress.get('implementation') and progress.get('commit') == expected['commit']
         if report['kind'] == 'technical' and ((unchanged_retry(state, expected) and not verified_progress) or report.get('experiment')):
             experiment = experiment_evidence(report, path, state, expected)
         follow = continuation(conn, project, plan, package, state, report, selected)
@@ -172,7 +172,7 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
                                     'action': follow[1] if follow else None}
                      if report['kind'] == 'technical' else None)
         if contract:
-            state['authorization'].update(contract=contract, protocol=2)
+            state['authorization'].update(contract=contract, protocol=3)
         if report['kind'] == 'technical':
             state['accepted_scope'] = dict(expected)
         runtime.kv_set(conn, project, _key(plan, package), json.dumps(state))
@@ -184,7 +184,7 @@ def authorization(conn, project, plan, package, current):
         return None
     state = _load(conn, project, plan, package)
     grant = state.get('authorization')
-    return grant if state.get('scope') == current and grant and grant.get('protocol') == 2 else None
+    return grant if state.get('scope') == current and grant and grant.get('protocol') == 3 else None
 
 
 def consume(conn, project, plan, package, current, attempt=''):
@@ -193,7 +193,7 @@ def consume(conn, project, plan, package, current, attempt=''):
         if scope(conn, project, plan, package, current['commit']) != current:
             return False
         state = _load(conn, project, plan, package)
-        if state.get('scope') != current or (state.get('authorization') or {}).get('protocol') != 2:
+        if state.get('scope') != current or (state.get('authorization') or {}).get('protocol') != 3:
             return False
         scopes = state.setdefault('consumed_scopes', [])
         basis = {k: current[k] for k in ('commit', 'decisions')}
@@ -205,7 +205,7 @@ def consume(conn, project, plan, package, current, attempt=''):
         contract = state['authorization'].get('contract')
         if contract:
             state['assigned'] = {'attempt': attempt, 'id': repair_contract.identity(contract),
-                                 'contract': contract}
+                                 'contract': contract, 'commit': current['commit']}
         state['authorization'] = None
         runtime.kv_set(conn, project, _key(plan, package), json.dumps(state))
         return True
@@ -234,11 +234,14 @@ def prompt(conn, project, plan, package, commit, output_path, current_class, off
     state = _load(conn, project, plan, package)
     latest = history.get('attempts', [])
     progress = state.get('progress', {}).get(latest[0]['attempt']) if latest else None
-    if progress:
+    observation = (state.get('observations', {}).get(latest[0]['attempt']) if latest else None) or (progress if progress and not progress.get('implementation') else None)
+    if observation:
+        sources += '\nPrior step produced observation evidence only; reuse ' + observation['result_path'] + '; do not report step_complete or delegate another investigation.\n'
+    if progress and progress.get('implementation'):
         sources += ('\nThe latest assigned repair step passed every recorded criterion. The package is still open. '
                     'Do not treat remaining package requirements as failure of that step. Reuse its receipt at '
-                    + progress['result_path'] + '; select the next unresolved prerequisite, preserving the verified work.\n')
-    if unchanged_retry(state, current) and not progress:
+                    + progress['result_path'] + '; select the next behavior-changing repair, reusing the findings.\n')
+    if unchanged_retry(state, current) and not (progress or {}).get('implementation'):
         sources += ('\nUNCHANGED CODE AFTER AN AUTHORIZED REPAIR: another history entry, renamed agent, '
                     'paraphrased approach or higher model class is not new evidence. Do not authorize '
                     'the same broad task again. Investigate why the previous repair produced no verified '

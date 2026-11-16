@@ -559,7 +559,7 @@ def cmd_bee(args, conn):
         from haivequeen import package_diagnosis
         review = package_diagnosis._load(conn, args.project, plan, args.package)
         if review.get('phase') in ('pending', 'running', 'owner'):
-            out({'ok': True, 'outcome': 'failed' if violation else args.outcome,
+            out({'ok': True, 'outcome': 'failed' if violation else ('observed' if args.attempt in review.get('observations', {}) else args.outcome),
                  'failures': bees.failure_count(conn, args.project, plan, args.package, args.cls),
                  'nextAction': 'wait_for_owner' if review['phase'] == 'owner' else 'wait_for_diagnosis',
                  **(branchguard.failure_fields(violation) if violation else {})})

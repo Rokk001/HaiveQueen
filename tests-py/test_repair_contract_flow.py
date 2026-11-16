@@ -31,6 +31,7 @@ class RepairContractFlow(RoundCase):
                 prerequisites=[dict(id='admission', status='unresolved', reason='legacy callers ignore new gates'),
                                dict(id='primitive', status='verified', reason='isolated probe passed', evidence=[0])],
                 requires=['admission'] if blocked else ['primitive'], resolves=[],
+                repair=dict(goal='Safe activation', behavior='Reject changed candidate', criterion='reject', implementation_paths=['activation.py'], regression_paths=['test_activation.py']),
                 criteria=[dict(id='reject', expectation='Reject changed candidate', check='python -m unittest changed'),
                           dict(id='cleanup', expectation='Release owned reservation on rejection', check='python -m unittest cleanup')]))
         state = diagnosis._load(self.conn, 'testproj', REL, 'P1')
@@ -64,7 +65,7 @@ class RepairContractFlow(RoundCase):
         path.write_text(json.dumps(data))
         return path, data
 
-    def result(self, attempt, outcome, path='', head='head-2'):
+    def result(self, attempt, outcome, path='', head='head-2', real_evidence=False):
         args = cli.build_parser().parse_args(['agent', 'result', '--project', 'testproj', '--plan', REL,
             '--package', 'P1', '--class', 'medium', '--attempt', attempt, '--outcome', outcome,
             '--open-requirements', '["R1"]', '--error', 'Package remains open',
@@ -73,6 +74,7 @@ class RepairContractFlow(RoundCase):
         with mock.patch.dict('os.environ', {'BZZ_AGENT': 'queen'}), \
              mock.patch.object(cli.config, 'load_config', return_value=self.machine), \
              mock.patch('haivequeen.package_diagnosis.current_commit', return_value=head), \
+             (contextlib.nullcontext() if real_evidence else mock.patch('haivequeen.repair_contract.implementation_evidence', side_effect=lambda receipt, *args: receipt.update(implementation={'goal': 'Safe activation'}))), \
              contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             status = cli.cmd_bee(args, self.conn)
         return status, output.getvalue()
@@ -187,15 +189,103 @@ class RepairContractFlow(RoundCase):
         self.assertIn('Release owned reservation on rejection', started['prompt'])
         self.assertIn('python -m unittest cleanup', started['prompt'])
 
-    def test_verified_same_commit_progress_is_idempotent_without_new_probe(self):
+    def test_legacy_receipt_is_observation_not_repair_and_replay_is_idempotent(self):
         self.accept(*self.report())
-        self.start('verified-step')
-        path, _ = self.receipt('verified-step', 'head-1')
+        self.start('legacy-step')
+        state = diagnosis._load(self.conn, 'testproj', REL, 'P1')
+        state['assigned']['contract'].pop('repair')
+        state['assigned']['id'] = repair_contract.identity(state['assigned']['contract'])
+        runtime.kv_set(self.conn, 'testproj', diagnosis._key(REL, 'P1'), json.dumps(state))
+        path, _ = self.receipt('legacy-step', 'head-1')
         for _ in range(2):
-            status, output = self.result('verified-step', 'progress', path, 'head-1')
+            status, output = self.result('legacy-step', 'progress', path, 'head-1')
             self.assertEqual(status, 0, output)
+            self.assertEqual(json.loads(output)['outcome'], 'observed')
+        saved = diagnosis._load(self.conn, 'testproj', REL, 'P1')
+        self.assertIn('legacy-step', saved['observations'])
+        self.assertNotIn('legacy-step', saved.get('progress', {}))
+        self.assertEqual(saved['phase'], 'pending')
         self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'medium'), 1)
         self.assertFalse(bees.package_done(self.conn, 'testproj', REL, 'P1'))
-        self.accept(*self.report('head-1', 'Establish the next prerequisite'))
-        self.assertIsNotNone(diagnosis.authorization(self.conn, 'testproj', REL, 'P1',
-            diagnosis.scope(self.conn, 'testproj', REL, 'P1', 'head-1')))
+
+    def test_new_commits_and_renamed_investigations_do_not_authorize_repairs(self):
+        self.accept(*self.report())
+        self.start('first')
+        path, _ = self.receipt('first')
+        self.assertEqual(self.result('first', 'progress', path)[0], 0)
+        for i in range(5):
+            scope, data = self.report('head-' + str(i + 2), 'New observation ' + str(i))
+            data['contract'].pop('repair')
+            with self.assertRaisesRegex(ValueError, 'perform investigations in diagnosis'):
+                self.accept(scope, data)
+            self.assertIsNone(diagnosis.authorization(self.conn, 'testproj', REL, 'P1', scope))
+        scope, data = self.report('head-2', 'Implement the established fix')
+        self.accept(scope, data)
+        self.assertTrue(self.start('actual-repair', 'head-2'))
+
+    def test_goal_cannot_be_replaced_by_another_question(self):
+        self.accept(*self.report())
+        scope, data = self.report('head-2', 'Investigate something else')
+        data['contract']['repair']['goal'] = 'Discover another observation'
+        with self.assertRaisesRegex(ValueError, 'retain the repair goal'):
+            self.accept(scope, data)
+
+    def test_protocol_two_authorization_is_not_reused(self):
+        scope, data = self.report()
+        self.accept(scope, data)
+        state = diagnosis._load(self.conn, 'testproj', REL, 'P1')
+        state['authorization']['protocol'] = 2
+        runtime.kv_set(self.conn, 'testproj', diagnosis._key(REL, 'P1'), json.dumps(state))
+        self.assertIsNone(diagnosis.authorization(self.conn, 'testproj', REL, 'P1', scope))
+        self.assertFalse(diagnosis.consume(self.conn, 'testproj', REL, 'P1', scope, 'legacy'))
+        self.assertFalse(self.start('legacy'))
+        self.assertEqual(diagnosis._load(self.conn, 'testproj', REL, 'P1')['phase'], 'pending')
+
+    def test_real_behavior_fix_runs_through_authorization_receipt_and_next_step(self):
+        import subprocess, sys
+        folder = self.base / 'assigned-agent-worktree'
+        def git(*args):
+            return subprocess.run(['git', '-C', str(folder), *args], capture_output=True,
+                                  text=True, check=True, timeout=10).stdout.strip()
+        git('init', '-q'); git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid')
+        (folder / 'activation.py').write_text('value = 0\n')
+        test = folder / 'test_activation.py'
+        test.write_text('from activation import value\nassert value == 1\n')
+        git('add', 'activation.py', 'test_activation.py'); git('commit', '-qm', 'Initial defect')
+        before = git('rev-parse', 'HEAD')
+        scope, report = self.report(before)
+        command = 'python -B test_activation.py'
+        report['contract']['criteria'] = [dict(id='reject', expectation='Correct required value', check=command)]
+        self.accept(scope, report)
+        self.assertTrue(self.start('real-repair', before))
+        baseline = subprocess.run([sys.executable, '-B', str(test)], capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(baseline.returncode, 0)
+        (self.base / 'baseline.log').write_text(baseline.stderr)
+        (self.base / 'test.snapshot').write_bytes(test.read_bytes())
+        (folder / 'activation.py').write_text('value = 1\n')
+        git('add', 'activation.py'); git('commit', '-qm', 'Repair the value')
+        after = git('rev-parse', 'HEAD')
+        checked = subprocess.run([sys.executable, '-B', str(test)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        path, data = self.receipt('real-repair', after)
+        data['baseline'] = dict(commit=before, command=command, exit=baseline.returncode,
+            log='baseline.log', regression_files={'test_activation.py':'test.snapshot'})
+        path.write_text(json.dumps(data))
+        with mock.patch('haivequeen.package_diagnosis.checkout', return_value=folder):
+            status, output = self.result('real-repair', 'progress', path, after, real_evidence=True)
+        self.assertEqual(status, 0, output)
+        self.assertEqual(json.loads(output)['nextAction'], 'wait_for_diagnosis')
+        state = diagnosis._load(self.conn, 'testproj', REL, 'P1')
+        self.assertEqual(state['progress']['real-repair']['implementation']['changed'], ['activation.py'])
+        self.assertFalse(bees.package_done(self.conn, 'testproj', REL, 'P1'))
+        self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'medium'), 1)
+        scope, follow = self.report(after, 'Repair next behavior')
+        self.accept(scope, follow)
+        self.assertTrue(self.start('next-repair', after))
+
+    def test_characterization_cannot_be_delegated_as_initial_repair(self):
+        scope, data = self.report()
+        data['contract'].pop('repair')
+        with self.assertRaisesRegex(ValueError, 'perform investigations in diagnosis'):
+            self.accept(scope, data)
+        self.assertIsNone(diagnosis.authorization(self.conn, 'testproj', REL, 'P1', scope))

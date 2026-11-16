@@ -84,12 +84,13 @@ verification. This change does not claim to complete any live project plan.
 ## Executable contracts and repair-level progress
 
 Technical package diagnoses now include one authoritative `contract`: `objective`,
-`why_executable`, `prerequisites`, `requires`, `resolves` and `criteria`. Each
+`why_executable`, `prerequisites`, `requires`, `resolves`, `criteria` and `repair`. Each
 prerequisite has a stable `id`, `status` (verified/unresolved), `reason`, and, when
 verified, `evidence` indexes into the report's evidence list. Required prerequisites
 must be verified. A step cannot assume the prerequisite it is assigned to establish;
 unresolved prerequisites cannot disappear from subsequent contracts. An independently
-executable prerequisite step can proceed while the larger implementation stays blocked.
+executable behavior-changing repair can proceed while the larger implementation stays blocked.
+Investigation probes belong in the diagnosis, not another delegated repair task.
 The model evaluates evidence and feasibility; Python checks dependency consistency,
 not the truth of arbitrary prose.
 
@@ -110,9 +111,9 @@ rerunning it: Agents must not fabricate results and the Queen must review them.
 
 Progress leaves the package open and preserves failure counters without incrementing
 them. The receipt survives restart. The next diagnosis receives that verified progress
-and selects the next unresolved prerequisite. Remaining package requirements are not
-a failure of the completed step. A new reproduction is not demanded merely because
-a verified step left the commit unchanged. Later genuine failures still enter
+and selects the next behavior-changing repair using retained findings. Remaining package requirements are not
+a failure of the completed step. A changed implementation commit is required; an unchanged commit or a test-only characterization
+cannot qualify as a new repair. Later genuine failures still enter
 diagnosis without erasing earlier progress; replayed receipts cannot close another
 attempt. Normal package success still requires the complete package's verification.
 
@@ -139,3 +140,41 @@ non-integer exit codes remain invalid. Evidence reuse guards and one-use repair
 permissions are unchanged. A protocol correction receives the prior report path
 and reuses valid observations instead of repeating a probe just to repair JSON.
 This does not grant a repair retry or complete any package by itself.
+
+## Preventing investigation chains (protocol 3)
+
+Previously a contract could ask only for characterization of a defect. Its green
+checks counted as progress and automatically started another diagnosis, even while
+the original defect remained unchanged. New commits and differently named probes
+passed the action novelty guard. The missing distinction was implementation versus
+observation, not the number of failed attempts.
+
+`contract.repair` now names a stable `goal`, corrected `behavior`, a positive
+`criterion` ID, and explicit, separate `implementation_paths` and `regression_paths`.
+The goal cannot drift into a new question in a follow-up. Diagnosis must perform
+necessary safe probes itself and then prescribe an executable implementation;
+a new observation alone is not a delegated repair contract. Genuine external
+prerequisites keep their existing owner-question path.
+
+At dispatch HQ records the starting commit. A progress receipt additionally supplies
+`baseline: {commit, command, exit, log, regression_files: {repository_path: snapshot}}`.
+The final positive regression is run on the starting implementation before modifying
+it, and exact regression file copies and the nonzero baseline log are retained beside
+the receipt. HQ requires the same command to pass, a descendant commit changing at
+least one declared implementation file, and regression snapshots matching committed
+files using Git's path-specific normalization. Altering assertions to accept the
+observed defect cannot count as a repair. No extra model calls or full test suites
+are introduced. Exit codes remain reported evidence reviewed by the Queen; this is
+not an independent execution of every supplied command or a semantic proof of a test.
+
+Protocol-2 grants cannot start new repairs. In-flight legacy receipts are preserved
+as `observations`; the response reports `observed`, without resetting failures or
+closing the package. Historical receipts without implementation evidence also no
+longer justify `step_complete` or bypass the unchanged-code guard. Their evidence
+remains referenced for the next diagnosis. No active process is stopped by migration.
+
+Regression coverage includes a real failing check, Git implementation commit and
+passing identical check through authorization, result recording and next-step dispatch;
+five renamed investigation proposals with incidental commits; changed goals; test-only
+commits; changed assertions plus incidental implementation edits; invalid baselines;
+legacy receipts and grants; replay protection and persisted progress after restart.

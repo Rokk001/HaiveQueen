@@ -27,6 +27,7 @@ class PackageDiagnosis(RoundCase):
                       why_new='The actual failing caller has now been identified.')
         report['contract'] = dict(objective='Correct caller behavior', why_executable='The isolated caller is directly testable.',
             prerequisites=[], requires=[], resolves=[],
+            repair=dict(goal='Correct caller behavior', behavior='Caller accepts argument', criterion='caller', implementation_paths=['caller.py'], regression_paths=['test_caller.py']),
             criteria=[dict(id='caller', expectation='Caller accepts the argument', check='python -m unittest caller')])
         previous = self.review._load(self.conn, 'testproj', REL, 'P1').get('report')
         if previous:
@@ -399,7 +400,7 @@ class DiagnosisReportBinding(PackageDiagnosis):
             self.review.advance(env, 16384, alive=lambda pid: False)
         state = self.review._load(self.conn, env.name, REL, 'P1')
         self.assertEqual(state['phase'], 'authorized')
-        self.assertEqual(state['authorization']['protocol'], 2)
+        self.assertEqual(state['authorization']['protocol'], 3)
         self.assertEqual(runtime.list_questions(self.conn, env.name, status='open'), [])
         self.assertEqual(bees.failure_count(self.conn, env.name, REL, 'P1', 'medium'), 1)
 

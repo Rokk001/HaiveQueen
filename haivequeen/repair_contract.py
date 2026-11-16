@@ -1,6 +1,7 @@
 """Executable repair contracts and evidence for progress short of package completion."""
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 
@@ -10,6 +11,75 @@ def identity(value):
 
 def text(value):
     return isinstance(value, str) and bool(value.strip())
+
+
+def repair_spec(contract, previous=None):
+    """A delegated repair must change behavior, not commission another observation."""
+    repair = contract.get('repair')
+    if not isinstance(repair, dict) or any(not text(repair.get(k)) for k in ('goal', 'behavior', 'criterion')):
+        raise ValueError('repair needs a persistent goal, positive behavior and criterion; perform investigations in diagnosis, not another repair Agent')
+    old = ((previous or {}).get('contract') or {}).get('repair') or {}
+    if old.get('goal') and repair['goal'] != old['goal']:
+        raise ValueError('retain the repair goal across follow-ups; narrow implementation, not the goal')
+    for key in ('implementation_paths', 'regression_paths'):
+        paths = repair.get(key)
+        if (not isinstance(paths, list) or not paths or any(not isinstance(v, str) for v in paths)
+                or len(set(paths)) != len(paths) or any(not text(v) or Path(v).is_absolute() or '..' in Path(v).parts
+                       or '\\' in v or ':' in v or any(c in v for c in '*?[') for v in paths)):
+            raise ValueError('repair requires explicit repository-relative ' + key)
+    if set(repair['implementation_paths']) & set(repair['regression_paths']):
+        raise ValueError('implementation and regression files must be separate')
+    if repair['criterion'] not in {c.get('id') for c in contract.get('criteria', [])}:
+        raise ValueError('repair criterion must name a prescribed positive check')
+    return repair
+
+
+def implementation_evidence(receipt, assigned, checkout):
+    """Bind reported red/green evidence to changed code and unchanged assertions."""
+    repair = repair_spec(assigned['contract'])
+    baseline = receipt.get('baseline')
+    before = assigned.get('commit')
+    if not before or not isinstance(baseline, dict) or baseline.get('commit') != before or before == receipt['commit']:
+        raise ValueError('repair needs a baseline at the assigned commit and a changed implementation commit')
+    check = next(c for c in receipt['checks'] if c['id'] == repair['criterion'])
+    if baseline.get('command') != check['command'] or type(baseline.get('exit')) is not int or baseline['exit'] == 0:
+        raise ValueError('repair baseline must fail the same prescribed positive check')
+    root = Path(receipt['result_path']).parent
+    def evidence_file(name):
+        if not text(name) or Path(name).is_absolute():
+            raise ValueError('baseline evidence must be a relative file')
+        target = (root / name).resolve()
+        if not target.is_relative_to(root) or not target.is_file() or not 0 < target.stat().st_size <= 4 * 1024 * 1024:
+            raise ValueError('baseline evidence is missing, empty or outside the result directory')
+        return target.read_bytes()
+    log = evidence_file(baseline.get('log'))
+    def git(*args):
+        if not checkout:
+            raise ValueError('repair checkout is unavailable')
+        try:
+            result = subprocess.run(['git', '-C', str(checkout), *args], capture_output=True, timeout=15)
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError('repair commit evidence timed out') from exc
+        if result.returncode:
+            raise ValueError('repair commit evidence is unavailable')
+        return result.stdout
+    if git('merge-base', '--is-ancestor', before, receipt['commit']) != b'':
+        raise ValueError('repair commit must descend from the assigned baseline')
+    changed = set(git('diff', '--name-only', before, receipt['commit'], '--', *repair['implementation_paths']).decode().splitlines())
+    if not changed:
+        raise ValueError('investigation-only changes are evidence, not implementation progress')
+    snapshots = baseline.get('regression_files')
+    if not isinstance(snapshots, dict) or set(snapshots) != set(repair['regression_paths']):
+        raise ValueError('baseline requires snapshots of every regression file')
+    digests = {}
+    for name, snapshot in snapshots.items():
+        contents = evidence_file(snapshot)
+        if git('hash-object', '--path=' + name, str((root / snapshot).resolve())).strip() != git('rev-parse', receipt['commit'] + ':' + name).strip():
+            raise ValueError('regression assertions changed after the failing baseline')
+        digests[name] = hashlib.sha256(contents).hexdigest()
+    receipt['implementation'] = dict(goal=repair['goal'], before=before, changed=sorted(changed),
+        baseline_digest=hashlib.sha256(log).hexdigest(), regression_digests=digests)
+    return receipt
 
 
 def validate(report, previous=None):
@@ -50,6 +120,7 @@ def validate(report, previous=None):
                 or not text(criterion.get('expectation')) or not text(criterion.get('check'))):
             raise ValueError('each criterion needs a unique ID, expectation and focused check command')
         seen.add(criterion['id'])
+    repair_spec(contract, previous)
     return contract
 
 
