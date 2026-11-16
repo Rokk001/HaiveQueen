@@ -43,6 +43,8 @@ def scan_linux(directory, proc=Path('/proc')):
             cmd = (process / 'cmdline').read_bytes().decode('utf-8', 'surrogateescape')
             if any(_contains(directory, v) for v in (exe, cwd, cmd)):
                 return True
+            # These fields do not reveal all Python code loaded by a live process.
+            uncertain = True
         except (OSError, ValueError):
             # Vanishing processes are harmless, but inaccessible live ones are
             # unknown. Recheck existence because proc entries race with exit.

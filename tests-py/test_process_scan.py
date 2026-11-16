@@ -22,7 +22,7 @@ class ProcessScanTests(unittest.TestCase):
             with patch('haivequeen.process_scan.os.readlink', return_value='/elsewhere'):
                 self.assertTrue(scan_linux(version, proc))
                 (entry / 'cmdline').write_bytes(b'python\0/elsewhere/worker.py\0')
-                self.assertFalse(scan_linux(version, proc))
+                self.assertIsNone(scan_linux(version, proc))
 
     def test_inaccessible_process_is_uncertain(self):
         with tempfile.TemporaryDirectory() as temp:
