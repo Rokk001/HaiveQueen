@@ -189,7 +189,7 @@ class WebApiTests(RoundCase):
         providers = [{'name': 'current', 'capabilities': ['Queen'], 'classes': {'medium': {'model': 'model'}}},
                      {'name': 'alternate', 'capabilities': ['Queen'], 'classes': {'medium': {'model': 'model'}}},
                      {'name': 'worker', 'capabilities': [], 'classes': {'medium': {'model': 'model'}}}]
-        env = SimpleNamespace(name='testproj', settings={}, providers=providers)
+        env = SimpleNamespace(name='testproj', settings={'queenClass': 'medium'}, providers=providers)
         with mock.patch.object(web_api.sch, 'load_projects', return_value=[env]), mock.patch.object(hives, 'get', return_value={'provider': 'current'}), mock.patch.object(hives, 'requeen') as restart:
             choices = web_api.execute(self.conn, 'plan/providers', {'project': 'testproj', 'plan': REL})
             self.assertEqual(choices, [{'name': 'current', 'current': True, 'selectable': True}, {'name': 'alternate', 'current': False, 'selectable': True}])

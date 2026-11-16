@@ -1064,3 +1064,8 @@ GERMAN.update({'Release publication': 'Release-Veröffentlichung',
                'Tool installation': 'Werkzeuginstallation', 'Error details': 'Fehlerdetails',
                'Publication requested; confirmation is available in Releases.':
                'Veröffentlichung angefordert; Bestätigung unter Releases prüfen.'})
+
+GERMAN.update({
+    "Heavy is recommended for Queen coordination. Configure a capable model and suitable reasoning effort for this class in Providers; existing choices are preserved.": "Heavy wird für die Queen-Koordination empfohlen. Konfiguriere unter Anbieter ein leistungsfähiges Modell und eine passende Denkstufe; bestehende Einstellungen bleiben erhalten.",
+    "Heavy is recommended for question, package and integration diagnosis; model and effort come from Providers. Higher effort can cost more; class alone does not guarantee quality.": "Heavy wird für Fragen-, Paket- und Integrationsdiagnosen empfohlen; Modell und Denkstufe stammen aus Anbieter. Mehr Denkaufwand kann mehr kosten; die Klasse allein garantiert keine Qualität.",
+})

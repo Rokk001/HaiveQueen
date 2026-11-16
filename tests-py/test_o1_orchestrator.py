@@ -307,7 +307,7 @@ class FixAgent(OrchCase):
                 if agent["status"] in ("running", "starting"):
                     self.end_fixer(agent)
         self.round()
-        self.assertEqual([a["class"] for a in self.fixers()][:2], ["medium", "light"])
+        self.assertEqual([a["class"] for a in self.fixers()][:2], ["heavy", "light"])
         self.assertTrue(self.state()['fix']['diagnosis'])
         self.assertEqual(len(self.question("fix-escalation")), 0)
         self.assertEqual(self.plan_status(), "RUNNING")

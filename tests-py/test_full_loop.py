@@ -9,6 +9,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 import unittest
 
 from bzztest import REL, RoundCase, provider, runtime
@@ -65,7 +66,7 @@ class FullLoopTest(RoundCase):
         cfg = self.base / "cfg"
         cfg.mkdir(exist_ok=True)
         toml = ("[[providers]]\nname = 'claude'\ncommand = '%s'\nargs = []\ncapabilities = ['build']\n"   # its Queen does the Build step only with the build entry
-                "[providers.classes.medium]\nmodel = 'claude-sonnet-5-5'\neffort = 'medium'\n" % str(cmd).replace(chr(92), "/"))
+                "[providers.classes.heavy]\nmodel = 'claude-sonnet-5-5'\neffort = 'medium'\n" % str(cmd).replace(chr(92), "/"))
         (cfg / "config.toml").write_text(toml, encoding="utf-8")   # the agent runner reads the providers from this file
         prov = provider("claude", 3)
         prov["command"] = str(cmd)
@@ -97,7 +98,15 @@ class FullLoopTest(RoundCase):
     def test_plan_to_integrated(self, prepared):
         """READY plan: one Queen integrates her branch and the plan becomes DONE."""
         round_kwargs = {"free_ram": lambda: 16.0, "settle": 0}
-        code = loop.run_loop(self.conn, self.machine, rounds=8, round_minutes=0.05, wait_seconds=0.3, round_kwargs=round_kwargs)
+        deadline = time.monotonic() + 60
+        def until_owner_check(seconds):
+            if runtime.list_questions(self.conn, "testproj", status="open", plan=REL, item="owner-check") or time.monotonic() >= deadline:
+                loop.stop_flag().touch()  # isolated fixture only; wait for the outcome, not eight rounds
+            else:
+                time.sleep(min(seconds, 0.05))
+        code = loop.run_loop(self.conn, self.machine, rounds=0, round_minutes=0.001,
+                             sleep=until_owner_check, wait_seconds=0.05, round_kwargs=round_kwargs)
+        loop.stop_flag().unlink(missing_ok=True)
         self.assertEqual(code, 0)
         ran = self.log_file.read_text(encoding="utf-8").split() if self.log_file.is_file() else []
         self.assertEqual(len(ran), 1, "the plan should have one Queen: %s\n%s" % (ran, self.log()))

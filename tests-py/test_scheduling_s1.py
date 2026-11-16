@@ -262,6 +262,7 @@ class SlotAndProviderChoiceTests(RoundCase):
 
     # A package of a class only another provider offers reserves that provider's slot: the new Queen takes the Queen provider's slot.
     def test_reservation_takes_a_slot_of_a_provider_with_the_class(self):
+        self.machine['queenClass'] = 'medium'  # Explicit class for this provider-routing scenario.
         self.machine['providers'] = [provider('claude', 2, classes=('light', 'medium')), provider('codex', 1, proto='codex')]
         self.running_queen([{'id': 'P1', 'title': 'Heavy', 'class': 'heavy'}])
         other = self.other_ready_plan()

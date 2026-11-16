@@ -104,6 +104,27 @@ def record_embedded_start(conn, project, plan, package, name, cls, provider, mod
                  (project, plan, package, name, cls, provider, model, effort, db.now(), queen or ''))
 
 
+def handoff(env, plan, package, queen, launched=False):
+    """Retrieve the durable native launch payload; acknowledge only a real launch."""
+    from . import package_diagnosis
+    with db.transaction(env.conn):
+        rows = unconfirmed_embedded(env.conn, env.name, plan, package)
+        if len(rows) != 1 or not own_embedded(rows[0], queen):
+            raise ValueError('handoff requires one open subagent owned by this Queen')
+        key = 'bee-handoff:' + rows[0]['name']
+        record = json.loads(runtime.kv_get(env.conn, env.name, key) or '{}')
+        if not record:
+            raise ValueError('no durable handoff exists for this legacy attempt')
+        if launched and not record.get('launched'):
+            scope = record.get('scope')
+            if scope and (package_diagnosis.current_commit(env, plan, package) != scope['commit'] or
+                          not package_diagnosis.consume(env.conn, env.name, plan, package, scope, rows[0]['name'])):
+                raise ValueError('repair scope changed; launch authorization is no longer valid')
+            record['launched'] = True
+            runtime.kv_set(env.conn, env.name, key, json.dumps(record))
+        return {**record['payload'], 'launched': bool(record.get('launched'))}
+
+
 # Names that open embedded Bees hold.
 def open_embedded_names(conn, skip=None) -> set:
     """The names of the embedded Agents that have not ended; `skip` is a (project, plan, package) whose Agent does not count because it is being replaced."""
@@ -878,6 +899,14 @@ def _report_attempt(env, plan, package, cls, outcome, attempt, open_requirements
     if foreign:
         from . import branchguard
         outcome, error, blocked, force_failure = 'failed', branchguard.failure_text(foreign), '', True
+    handoff_key = 'bee-handoff:' + str(attempt or '')
+    launch = json.loads(runtime.kv_get(env.conn, env.name, handoff_key) or '{}')
+    if launch and not launch.get('launched') and outcome != 'interrupted':
+        from . import package_diagnosis
+        if launch.get('scope') and not package_diagnosis.consume(env.conn, env.name, plan, package, launch['scope'], attempt):
+            raise ValueError('repair scope changed before the unacknowledged result')
+        launch['launched'] = True
+        runtime.kv_set(env.conn, env.name, handoff_key, json.dumps(launch))
     receipt = None
     if outcome == 'progress':
         from . import package_diagnosis, repair_contract
@@ -1262,9 +1291,15 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
         # The subagent gets the same Bee rules as a Bee process: the Queen hands this prompt on as the task of the subagent.
         prompt = bee_prompt(name, package, task, steps, paths, rules, buildjobs.rule_text(env.settings.get('buildJobs')), roles.language(env.settings))
         prompt += '\n\nAssigned worktree: %s; assigned branch: %s. Use the returned environment for every Git command in this Agent, including commands in other worktrees. Environment: %s' % (cwd, branch, json.dumps(git_environment))
+        prompt_file = env.run_dir(name) / 'handoff-prompt.md'
+        prompt_file.parent.mkdir(parents=True, exist_ok=True)
+        prompt_file.write_text(prompt, encoding='utf-8')
+        payload = {'prompt_file': str(prompt_file.resolve()), 'kind': 'subagent', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
         if review_grant:
-            package_diagnosis.consume(env.conn, env.name, plan, package, review_scope, name)
-        return {'kind': 'subagent', 'name': name, 'provider': provider, 'class': selected_class, 'cwd': cwd, 'branch': branch, 'environment': git_environment, 'prompt': prompt}
+            package_diagnosis.reserve(env.conn, env.name, plan, package, review_scope, name)
+        runtime.kv_set(env.conn, env.name, 'bee-handoff:' + name,
+                       json.dumps(dict(payload=payload, scope=review_scope, launched=False)))
+        return payload
     if not hives.can_start_bee(env.conn, env.name, plan, True, env.settings.get('contextLimitTokens', 300000)) or loop.ram_gb() < loop._min_ram(env) or free.get(provider, 0) <= 0:
         return refuse(env, package, 'an Agent process may not start now (starts paused or stopped, too little free RAM, or no free slot of provider %s)' % provider)
     path = Path(cwd or '')

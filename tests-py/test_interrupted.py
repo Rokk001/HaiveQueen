@@ -115,7 +115,7 @@ class InterruptedRetryTest(RoundCase):
         self.round()
         active = [a for a in runtime.list_agents(self.conn, "testproj", "all") if a["status"] == "running"]
         self.assertEqual(len(active), 1)
-        self.assertEqual(active[0]["class"], "medium")
+        self.assertEqual(active[0]["class"], "heavy")
 
     # Verify a limit does not trigger an automatic provider change.
     def test_rate_limit_rests_on_same_provider(self):

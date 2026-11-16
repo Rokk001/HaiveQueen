@@ -486,6 +486,8 @@ class PackageDiagnosisLifecycle(PackageDiagnosis):
             result = bees.start_process(env, REL, 'P1', 'Worker', 'medium', 'task', ['one'], [], [])
             self.assertTrue(result)
             self.assertNotIn('Work only package P1: task', result['prompt'])
+            self.assertIsNotNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', scope))
+            bees.handoff(env, REL, 'P1', runtime.get_agent(self.conn, 'testproj', 'queen'), launched=True)
             self.assertIsNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', scope))
             bees.close_embedded(self.conn, 'testproj', REL, 'P1')
             self.assertFalse(bees.start_process(env, REL, 'P1', 'Next', 'medium', 'task', ['one'], [], []))
@@ -517,6 +519,9 @@ class PackageDiagnosisLifecycle(PackageDiagnosis):
         self.assertNotIn('Repeat all investigation', result['prompt'])
         self.assertIn('Verify every criterion', result['prompt'])
         self.assertIn('AUTHORITATIVE REPAIR CONTRACT', result['prompt'])
+        self.assertIsNotNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', current))
+        with mock.patch('haivequeen.package_diagnosis.current_commit', return_value='head-1'):
+            bees.handoff(self.env(), REL, 'P1', runtime.get_agent(self.conn, 'testproj', 'queen'), launched=True)
         self.assertIsNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', current))
 
     def test_authorized_package_wakes_without_an_owner_question(self):

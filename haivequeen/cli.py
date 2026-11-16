@@ -502,6 +502,13 @@ def cmd_bee(args, conn):
     if not env:
         return fail("unknown Project")
     plan = queen["plan_path"]
+    if args.action in ("handoff", "launched"):
+        try:
+            payload = bees.handoff(env, plan, args.package, queen, args.action == "launched")
+            out({"ok": True, **{k: v for k, v in payload.items() if k != "prompt"}})
+            return 0
+        except ValueError as exc:
+            return fail(str(exc))
     if args.action == "wait":
         provider = scheduler.get_provider(env.providers, args.provider)
         if not provider or provider['name'] in env.settings.get('excludedProviders', []):
@@ -581,7 +588,8 @@ def cmd_bee(args, conn):
         return fail(str(exc))
     if isinstance(started, dict):
         bees.set_package_state(conn, args.project, plan, args.package, 'working', agent)
-        out({"ok": True, "started": started.get("kind") == "process", **started})
+        out({"ok": True, "started": started.get("kind") == "process",
+             **{k: v for k, v in started.items() if k != "prompt" or not started.get("prompt_file")}})
         return 0
     if started:
         bees.set_package_state(conn, args.project, plan, args.package, 'working', agent)
@@ -626,7 +634,7 @@ def build_parser() -> argparse.ArgumentParser:
         "refuses a subagent of the Queen with the reason, and refuses the Queen, who can only be ended by bzz dequeen. "
         "The package stays stopped and waits for an explicit owner instruction. The Queen gets the stop as an owner message in owner_messages. "
         "'bzz agent stop' remains a compatibility alias for force-stop."))
-    p.add_argument("action", choices=["start", "result", "history", "wait", "force-stop", "stop"])
+    p.add_argument("action", choices=["start", "handoff", "launched", "result", "history", "wait", "force-stop", "stop"])
     p.add_argument("target", nargs="?", default="", help="force-stop: the name of the one running Agent to end (owner only; not the Queen, not a subagent)")
     p.add_argument("--project", required=True)
     for field in ("plan", "package", "class"):   # required except for force-stop and its stop alias

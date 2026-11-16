@@ -9,12 +9,12 @@ from haivequeen import plans, scheduler
 class HiveConfigurationTests(unittest.TestCase):
     """Check the requested defaults and machine-wide settings."""
 
-    # A machine starts two Hives and Queens use medium with three Bees.
+    # A machine starts two Hives and Queens use heavy with three Bees.
     def test_hive_defaults(self):
-        """A machine starts two Plans and Queens use medium with three Agents."""
+        """A machine starts two Plans and Queens use heavy with three Agents."""
         settings = scheduler.build_settings({}, {})
         self.assertEqual(settings["hives"], 2)
-        self.assertEqual(settings["queenClass"], "medium")
+        self.assertEqual(settings["queenClass"], "heavy")
         self.assertEqual(settings["beesPerQueen"], 3)
         self.assertEqual(settings["escalateAfter"], 3)
         self.assertFalse(settings.get("preferredProvider"))

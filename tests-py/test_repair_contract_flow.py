@@ -55,8 +55,11 @@ class RepairContractFlow(RoundCase):
 
     def start(self, name, head='head-1'):
         with mock.patch('haivequeen.package_diagnosis.current_commit', return_value=head):
-            return bees.start_process(self.env(), REL, 'P1', name, 'medium',
-                                      'Complete the whole package', ['Repeat broad investigation'], [], [])
+            result = bees.start_process(self.env(), REL, 'P1', name, 'medium',
+                                        'Complete the whole package', ['Repeat broad investigation'], [], [])
+            if result and result.get('kind') == 'subagent':
+                bees.handoff(self.env(), REL, 'P1', runtime.get_agent(self.conn, 'testproj', 'queen'), launched=True)
+            return result
 
     def receipt(self, attempt, head='head-2'):
         assigned = diagnosis._load(self.conn, 'testproj', REL, 'P1')['assigned']

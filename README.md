@@ -88,6 +88,8 @@ Most day-to-day controls are also in the browser. Expand the reference for every
 | Command | Purpose |
 | --- | --- |
 | `bzz agent start` | Start a package agent in its assigned worktree. |
+| `bzz agent handoff` | Retrieve a reserved native Agent task after a lost response. |
+| `bzz agent launched` | Confirm native startup and consume its repair authorization. |
 | `bzz agent result` | Report an agent attempt and its evidence. |
 | `bzz agent history` | Read stored attempt history. |
 | `bzz agent wait` | Record that a package is waiting for provider capacity. |

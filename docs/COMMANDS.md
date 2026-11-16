@@ -152,3 +152,47 @@ The inventory includes compatibility aliases. Required inputs are marked; option
 | `bzz done`, `bzz ready`, `bzz ask`, `bzz note` | agents | final report, branch ready for integration, question, note ([runtime API](RUNTIME-API.md)) |
 
 A diagnosed repair may report `--outcome progress --repair-result <JSON file>` when every assigned repair criterion passed but the package remains open. The Queen reviews the receipt and logs; include the normal `--ended-evidence` for embedded Agents. HQ binds the receipt to the assigned attempt, contract and current commit and checks every prescribed command, zero exit code and nonempty local log. Protocol 5 additionally binds the complete workflow to package requirements and decisions and requires its independent scope review before dispatch. Baseline evidence, changed implementation files, unchanged regression snapshots and improved workflow checkpoints remain required. Unbound legacy receipts return `outcome: observed`, retaining evidence without granting repair progress. Progress preserves failure history without incrementing it or marking the package done. A pending diagnosis returns `nextAction: wait_for_diagnosis` instead of a contradictory `nextClass`; actual owner waits return `wait_for_owner`. See [PACKAGE-DIAGNOSIS-PROGRESS.md](PACKAGE-DIAGNOSIS-PROGRESS.md).
+
+### Recoverable native Agent handoff
+
+`bzz agent handoff --project P --plan PLAN --package PACKAGE --class CLASS`
+returns the existing open native launch payload to its owning Queen, including
+`prompt_file`, worktree and environment. Read the complete prompt file; CLI output
+does not embed the large prompt. Retrieval never creates another Agent. A true
+`launched` flag forbids spawning a duplicate.
+
+After confirmed native startup, the Queen calls `bzz agent launched` with the same
+scope arguments. Only this acknowledgement consumes a repair grant. A normal
+non-interrupted result also consumes it if acknowledgement was lost. A certainly
+unstarted reservation may be reported interrupted and retried with its still-valid
+grant; changed commit, decisions or failure history still require validation.
+Unknown or live launches must remain reserved. Legacy reservations without a
+durable handoff are not automatically treated as unstarted. No history is cleared.
+
+Diagnosis prompts reference the authoritative repair-contract schema instead of
+embedding it. Heavy defaults remain unchanged; provider-routing test fixtures
+state Medium explicitly when that is the scenario under test.
+
+### Repair flow regression coverage
+
+The targeted repair checks cover both package repair and integration repair:
+
+- `test_agent_handoff`: lost response, durable retrieval, unstarted cancellation,
+  duplicate start protection, launch acknowledgement and ownership/scope checks.
+  Its recovered flow reopens the database, repeats the handoff, runs a real failing
+  regression, commits the repair, validates its evidence and authorizes the next
+  required repair. Rejected receipts retain the reservation until corrected.
+- `test_repair_scope` and `test_repair_contract_flow`: rejected diagnosis,
+  corrected proposal, fresh review, bound dispatch, partial progress and unchanged
+  overall requirements; unrelated or incomplete evidence cannot grant progress.
+- `test_recovered_repair` and `test_repair_evidence`: lost completion after a real
+  Git repair, targeted verification, restart without duplicate verification and
+  return to the integration pipeline; failed checks never authorize integration.
+- `test_merge_repair_scenario`: two plans with real Git conflicts, failed repair,
+  diagnosis, corrected repair, a subsequent build failure and eventual owner review.
+- `test_full_loop`: the normal scheduler loop reaches owner review and requires
+  an explicit acceptance before completion.
+
+These isolated regression scenarios use deterministic agent results; they do not
+claim that a live provider has repaired an outstanding production plan. Production
+state, running agents and owner acceptance are never changed by these tests.

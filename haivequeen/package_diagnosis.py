@@ -205,6 +205,20 @@ def authorization(conn, project, plan, package, current):
     return grant if state.get('scope') == current and grant and grant.get('protocol') == 5 else None
 
 
+def reserve(conn, project, plan, package, current, attempt):
+    """Publish the assigned contract without consuming an unlaunched native grant."""
+    grant = authorization(conn, project, plan, package, current)
+    if not grant:
+        raise ValueError('repair authorization changed before native handoff')
+    state = _load(conn, project, plan, package)
+    contract = grant.get('contract')
+    if contract:
+        state['assigned'] = {'attempt': attempt, 'id': repair_contract.identity(contract),
+                             'contract': contract, 'commit': current['commit'],
+                             'workflow_progress': state.get('workflow_progress')}
+        runtime.kv_set(conn, project, _key(plan, package), json.dumps(state))
+
+
 def consume(conn, project, plan, package, current, attempt=''):
     """Consume only after a successful start; no attempt counters are reset."""
     with db.transaction(conn):
@@ -238,7 +252,7 @@ def prompt(conn, project, plan, package, commit, output_path, current_class, off
                'not a file path. Retrieve older attempts with --before and complete error detail with --attempt.\n'
                'bzz agent history --project %s --plan %s --package %s\n'
                'bzz decisions list --project %s\n' % tuple(json.dumps(v) for v in (project, plan, package, project)))
-    sources += '\n' + roles.role_text('repair-contract') + '\n'
+    sources += '\nRead the authoritative repair contract schema and rules: ' + str(roles.ROLES_DIR / 'repair-contract.md') + '\n'
     sources += repair_scope.instruction(repair_scope.reference(conn, project, plan, package))
     previous = _load(conn, project, plan, package).get('report', {})
     if previous:
