@@ -35,6 +35,13 @@ def lim(entry, source):
 
 
 class NoLimitFirst(srv.Base):
+    def setUp(self):
+        super().setUp()
+        # These tests compare ready providers, not credentials or connection probes.
+        self.ready = mock.patch('haivequeen.servers.readiness', return_value=(True, ''))
+        self.ready.start()
+        self.addCleanup(self.ready.stop)
+
     def providers(self):
         return sch.get_providers({"providers": [
             lim(srv.Base.entry("claude", "claude", use="preferred"), "claude"),

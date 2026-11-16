@@ -207,3 +207,17 @@ threshold or exhausted quota. Stale readings include their age and freshness
 limit. The same refusal text is retained in the Agent-start event log, so a later
 successful quota refresh does not erase the reason for the earlier refusal.
 No synchronous provider probe is added; unknown quota still prevents starts.
+
+### Durable agent handoff commands
+
+| Command | Inputs and effect |
+| --- | --- |
+| `bzz agent handoff` | `--project`, `--plan`, `--package`, `--class`: retrieve the existing native Agent payload and `prompt_file`; read that file completely. Does not launch another Agent. |
+| `bzz agent launched` | The same scope: acknowledge an actual native launch; consumes the scoped grant once. |
+| `bzz bee handoff` | Compatibility alias of `bzz agent handoff`, with the same inputs. |
+| `bzz bee launched` | Compatibility alias of `bzz agent launched`, with the same inputs. |
+
+Provider-ordering regression fixtures explicitly represent authenticated, connection-tested
+providers. They do not disable readiness checks in production. The subagent prompt
+regression reads the durable prompt file rather than expecting a duplicate inline payload.
+Provider wait log messages include a German translation while retaining their blocker details.

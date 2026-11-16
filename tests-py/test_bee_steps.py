@@ -213,10 +213,12 @@ class SubagentRulesTest(RoundCase):
         """bzz bee start answers kind subagent with the prompt built from roles/bee.md (task, numbered steps, the step report format) and stores the step count."""
         out = self.start()
         self.assertEqual(out["kind"], "subagent")
-        self.assertIn("You are an Agent", out["prompt"])
-        self.assertIn("build the thing", out["prompt"])
-        self.assertIn("3. test", out["prompt"])
-        self.assertIn("Ada P1: step n/3", out["prompt"])
+        self.assertNotIn("prompt", out)
+        prompt = Path(out["prompt_file"]).read_text(encoding="utf-8")
+        self.assertIn("You are an Agent", prompt)
+        self.assertIn("build the thing", prompt)
+        self.assertIn("3. test", prompt)
+        self.assertIn("Ada P1: step n/3", prompt)
         self.assertEqual(self.conn.execute("SELECT steps FROM bee_step_counts WHERE package='P1'").fetchone()[0], 3)
         self.assertEqual(self.conn.execute("SELECT state FROM package_progress WHERE package='P1'").fetchone()[0], "working")
 

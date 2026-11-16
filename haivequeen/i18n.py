@@ -214,6 +214,9 @@ _LOG_LINES = [(re.compile(pattern), replacement) for pattern, replacement in (
     (r"^Saved draft$", "Entwurf gespeichert"),
     (r"^Global plan control: (.*)$", r"Globale Plansteuerung: \1"),
     (r"^Waiting for build cores$", "Wartet auf Build-Kerne"),
+    (r"^Waiting for provider \(class (.+)\): (.*)$", r"Wartet auf Anbieter (Klasse \1): \2"),
+    (r"^active version changed; releasing the loop for takeover$", "Aktive Version geändert; Schleife wird für die Übernahme freigegeben"),
+    (r"^VERSION COLLECTION ERROR (.*)$", r"FEHLER BEIM BEREINIGEN ALTER VERSIONEN \1"),
     (r"^Owner action: (.*)$", r"Aktion des Owners: \1"),
     # ---- the Orchestrator pipeline
     (r"^Orchestrator: plan (.*): (.*)$", r"Orchestrator: Plan \1: \2"),

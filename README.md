@@ -95,6 +95,8 @@ Most day-to-day controls are also in the browser. Expand the reference for every
 | `bzz agent wait` | Record that a package is waiting for provider capacity. |
 | `bzz agent force-stop` | Owner: stop one eligible agent; its package waits for an instruction. |
 | `bzz agent stop` | Compatibility alias for agent force-stop. |
+| `bzz bee handoff` | Retrieve the existing native Agent handoff (`--project`, `--plan`, `--package`, `--class`). |
+| `bzz bee launched` | Acknowledge its actual native launch with the same scope. |
 | `bzz bee start` | Compatibility alias for agent start. |
 | `bzz bee result` | Compatibility alias for agent result. |
 | `bzz bee history` | Compatibility alias for agent history. |

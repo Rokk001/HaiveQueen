@@ -26,7 +26,8 @@ class CapabilityTests(unittest.TestCase):
         self.assertEqual(bees.route_candidates([p], "p", [], False), [])
         self.assertEqual(bees.route_candidates([p], "p", ["images"], False), [p])
 
-    def test_explicit_choices_and_endpoint_legacy(self):
+    @mock.patch("haivequeen.servers.readiness", return_value=(True, ""))
+    def test_explicit_choices_and_endpoint_legacy(self, _ready):
         p = sch.get_providers({"providers": [self.provider(capabilitiesVersion=1, capabilities=["Queen"], endpoint={"baseUrl": "http://localhost"})]})[0]
         self.assertEqual(p["capabilities"], ["Queen"])
         self.assertIs(sch.select_provider([p], "medium", ["Queen"], {"p": 1}), p)
