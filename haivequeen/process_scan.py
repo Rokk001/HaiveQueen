@@ -136,18 +136,16 @@ class _WindowsProcesses:
             image_read = kernel.QueryFullProcessImageNameW(process, 0, executable, ctypes.byref(size))
             if image_read and matches(executable.value):
                 return True
-            complete = bool(image_read) and readable
             if readable:
                 try:
                     for value in self.parameters(process):
-                        if value is None:
-                            complete = False
-                        elif matches(value):
+                        if value is not None and matches(value):
                             return True
                 except (OSError, ValueError, OverflowError):
-                    complete = False
-            wait = kernel.WaitForSingleObject(process, 0)
-            if wait == 0 or (wait == 258 and complete):  # WAIT_OBJECT_0 or WAIT_TIMEOUT
+                    pass
+            # Readable process fields do not reveal all loaded Python code.
+            # Only a verified exit can establish that this process is absent.
+            if kernel.WaitForSingleObject(process, 0) == 0:  # WAIT_OBJECT_0
                 return False
             return None
         finally:
