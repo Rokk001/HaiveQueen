@@ -71,6 +71,18 @@ def exclusive_registry_snapshot(root):
         yield value
 
 
+@contextmanager
+def exclusive_empty_registry(root):
+    """Hold an existing empty Windows registry exclusively for the caller.
+
+    This gate alone does not establish that activation or replacement is safe.
+    """
+    with exclusive_registry_snapshot(root) as value:
+        if value:
+            raise ValueError('version lease registry is not empty')
+        yield
+
+
 def _save(root, value):
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
