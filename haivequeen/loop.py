@@ -1139,6 +1139,7 @@ def register(sub) -> None:
     p.add_argument("--rounds", type=int, default=0, help="end after this many rounds (0 = until stopped)")
     p.add_argument("--round-minutes", type=float, default=0)
     p.add_argument("--keep-pause", action="store_true", help="do not lift a pause of the run before (used by the self-update)")
+    p.add_argument("--no-browser", action="store_true", help="start without opening a browser window (used by automatic restarts)")
     p.add_argument("--desktop", action="store_true", help="show the result in a desktop dialog")
     p.set_defaults(fn=cmd_start)
     p = sub.add_parser("gui")

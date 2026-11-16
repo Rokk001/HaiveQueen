@@ -1,5 +1,6 @@
 """Activation primitive for an already checked compatible release."""
 import os
+from contextlib import nullcontext
 from pathlib import Path
 
 from . import version_layout, version_leases
@@ -7,7 +8,7 @@ from .stable_launcher import lifetime_lock
 
 
 def activate(root, version, first_round, after_rollback=None, installation_token=None,
-             target_verifier=None):
+             target_verifier=None, publication_lock=nullcontext):
     """Switch the pointer and restore it if the successor fails its first round.
 
     The caller must establish compatibility before calling and ensure that
@@ -19,7 +20,7 @@ def activate(root, version, first_round, after_rollback=None, installation_token
     Exceptions from first_round trigger rollback and are propagated.
     """
     root = Path(root)
-    with lifetime_lock(root):
+    with publication_lock(), lifetime_lock(root):
         try:
             if target_verifier is None or target_verifier() is not True:
                 raise RuntimeError('target verification failed')

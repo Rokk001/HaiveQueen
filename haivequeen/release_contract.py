@@ -131,6 +131,7 @@ def assess(root, target_version, expected_active, authority):
                 raise ValueError('reservation for an unverified version')
         reference = Path(__file__).resolve().parent.parent
         supported_project, supported_files = _projection(reference)
+        _, supported_files = _settings_profile(supported_files)
         _, supported_files = _database_profile(supported_files)
         if not _environment(supported_project):
             raise ValueError('unsupported shared dependency environment')
@@ -141,6 +142,7 @@ def assess(root, target_version, expected_active, authority):
             raise ValueError('unknown fixed HQ launch protocol')
         evidence = {}
         profiles = {}
+        settings_profiles = {}
         for version, path in sorted(versions.items()):
             verified = authority[version]
             if not isinstance(verified, dict) or not release_tree.verify_installation(
@@ -149,12 +151,24 @@ def assess(root, target_version, expected_active, authority):
             project, files = _projection(path)
             if project != supported_project or not _environment(project):
                 raise ValueError('unsupported shared dependency or package contract: ' + version)
+            settings_profiles[version], files = _settings_profile(files)
             profile, files = _database_profile(files)
             profiles[version] = profile
             if files != supported_files:
                 raise ValueError('changed or unsupported shared consumers: ' + version)
             evidence[version] = {'commit': verified['commit'], 'tree': verified['tree']}
         target_profile = profiles[target_version]
+        target_settings = settings_profiles[target_version]
+        if target_settings == 'machine-toml-v2':
+            affected = sorted(v for v, profile in settings_profiles.items() if profile == 'config-toml-v1')
+            if affected:
+                if settings_profiles[active] != 'config-toml-v1' or len(set(profiles.values())) != 1:
+                    raise ValueError('unsupported combined or reverse settings transition')
+                return {'compatible': False, 'known': True, 'evidence': evidence,
+                        'settings_transition': True, 'affected_versions': affected,
+                        'reason': 'Shared machine settings move from config.toml to hq-machine.toml (affected versions: ' + ', '.join(affected) + ')'}
+        elif any(profile == 'machine-toml-v2' for profile in settings_profiles.values()):
+            raise ValueError('unsupported reverse settings transition')
         if target_profile == DATABASE_PROFILES[1]:
             if any(profile not in DATABASE_PROFILES for profile in profiles.values()):
                 raise ValueError('database transition lacks explicit supported old contract')
@@ -171,6 +185,58 @@ def assess(root, target_version, expected_active, authority):
     except (OSError, ValueError, TypeError, KeyError, SyntaxError, importlib.metadata.PackageNotFoundError) as exc:
         unknown['reason'] += ': ' + str(exc)
         return unknown
+
+SETTINGS_CONSUMERS = ('config', 'init', 'i18n', 'owner', 'projsettings', 'loop',
+                      'web_api', 'web_cli', 'web_server', 'web_service')
+
+
+def _settings_profile(files):
+    """Recognize a complete consumer transition, not just a declaration."""
+    files = dict(files)
+    descriptor = files.get('haivequeen/shared-contract.json')
+    value = json.loads(descriptor) if descriptor else {}
+    if not isinstance(value, dict):
+        raise ValueError('invalid shared settings contract')
+    profile = value.pop('settings', 'config-toml-v1')
+    if profile not in ('config-toml-v1', 'machine-toml-v2'):
+        raise ValueError('unsupported settings contract')
+    if descriptor:
+        files['haivequeen/shared-contract.json'] = json.dumps(value).encode()
+    if profile == 'machine-toml-v2':
+        for module in SETTINGS_CONSUMERS:
+            name = 'haivequeen/' + module + '.py'
+            text = files[name].decode('utf-8')
+            needles = ['config_dir() / ' + q + 'hq-machine.toml' + q for q in ('"', "'")]
+            if sum(text.count(needle) for needle in needles) != 1:
+                raise ValueError('settings contract contradicts packaged consumer: ' + name)
+            for needle in needles:
+                text = text.replace(needle, needle.replace('hq-machine.toml', 'config.toml'))
+            files[name] = text.encode('utf-8')
+    return profile, files
+
+
+def settings_transition_ready():
+    from . import config
+    source, target = (config.config_dir() / name for name in ('config.toml', 'hq-machine.toml'))
+    return source.is_file() and not source.is_symlink() and not target.exists() and not target.is_symlink()
+
+
+def move_settings(*, restore=False):
+    """Move the current settings without copying an obsolete snapshot over edits.
+
+    Caller holds the shared-data and launch locks in that order. Conflicting
+    files are retained and block recovery instead of silently losing settings.
+    """
+    from . import config
+    source, target = (config.config_dir() / name for name in ('config.toml', 'hq-machine.toml'))
+    if restore:
+        source, target = target, source
+        if not source.exists() and target.is_file() and not target.is_symlink():
+            return
+    if source.is_symlink() or target.is_symlink() or not source.is_file() or target.exists():
+        raise ValueError('settings transition has missing or conflicting files; settings preserved')
+    os.replace(source, target)
+
 
 # Explicit support for one reversible schema/consumer transition. These exact
 # transforms describe executable consumers and migration, not metadata trust.

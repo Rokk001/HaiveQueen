@@ -56,6 +56,21 @@ def package_files(source):
     return files
 
 
+def settings_break(files):
+    """Change every machine-config consumer to a different shared filename."""
+    files = dict(files)
+    files['haivequeen/shared-contract.json'] = b'{"format":1,"database":"usage-actions-v1","settings":"machine-toml-v2"}\n'
+    for module in ('config', 'init', 'i18n', 'owner', 'projsettings', 'loop',
+                   'web_api', 'web_cli', 'web_server', 'web_service'):
+        name = 'haivequeen/' + module + '.py'
+        text = files[name].decode('utf-8')
+        changed = text.replace('config_dir() / "config.toml"', 'config_dir() / "hq-machine.toml"')
+        changed = changed.replace("config_dir() / 'config.toml'", "config_dir() / 'hq-machine.toml'")
+        assert changed != text, name
+        files[name] = changed.encode('utf-8')
+    return files
+
+
 def database_break(files):
     """A real schema/consumer rename, not a compatibility boolean."""
     files = dict(files)

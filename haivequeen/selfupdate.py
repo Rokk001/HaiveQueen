@@ -394,6 +394,10 @@ def start_release_core(root):
         result = subprocess.run([osplat.python_executable(), '-I', str(root / 'launcher.py'),
                                  'start', '--keep-pause', '--no-browser'], cwd=root, stdin=subprocess.DEVNULL,
                                 stdout=output, stderr=subprocess.STDOUT)
+        if result.returncode:
+            output.seek(0)
+            raise RuntimeError('release core start failed (exit %s): %s' %
+                               (result.returncode, output.read().strip()))
     return result.returncode == 0
 
 
@@ -480,6 +484,8 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
                                         and (not r.get('pid') or not release_contract.process_ended(r['pid']))]
                         if not target_users:
                             release_contract.restore_database(conn)
+                            if info.get('settings_transition'):
+                                release_contract.move_settings(restore=True)
                             restored = True
                             break
                     sleep(poll)
@@ -498,6 +504,10 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
                 recovered[0] = receipt(conn, version_layout.version_dir(root, old_version), began_old,
                                        sleep, poll, timeout, loop_pid=loop_pid)
         if not info['compatible']:
+            if info.get('settings_transition') and not release_contract.settings_transition_ready():
+                note = 'update deferred: shared settings transition is not ready'
+                end_row(conn, row, old, 'failed', note)
+                return {'result': 'deferred', 'note': note, 'old': old, 'new': old}
             columns = {r[1] for r in conn.execute('PRAGMA table_info(providers_usage)')}
             if conn.execute('PRAGMA user_version').fetchone()[0] != 17 or 'actions' not in columns or 'actions_json' in columns:
                 note = 'update deferred: unsupported current database contract'
@@ -551,15 +561,21 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
             if info['compatible']:
                 return current['compatible'] is True
             columns = {r[1] for r in conn.execute('PRAGMA table_info(providers_usage)')}
-            return (current['compatible'] is False and current['reason'] == info['reason']
+            safe = (current['compatible'] is False and current['reason'] == info['reason']
                     and loop.stop_flag().exists() and not owner_stopped()
                     and not runstate.starts_allowed(conn) and not jobs(conn) and not loop_pid()
                     and conn.execute('PRAGMA user_version').fetchone()[0] == 17
                     and 'actions' in columns and 'actions_json' not in columns
                     and release_contract.drained(root, installations, installation_token))
+            if safe and info.get('settings_transition'):
+                if not release_contract.settings_transition_ready():
+                    return False
+                release_contract.move_settings()
+            return safe
+        activation_options = {'publication_lock': db.filetxn.locked} if info.get('settings_transition') else {}
         passed = activate(root, version, first_round, after_rollback=recover_old,
                           installation_token=installation_token,
-                          target_verifier=can_publish)
+                          target_verifier=can_publish, **activation_options)
         if resume_after and (passed or recovered[0]):
             runstate.resume(conn, 'release first round verified')
         if passed:

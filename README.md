@@ -314,7 +314,7 @@ Existing `[[decision]]` entries with `item = "owner-release"` continue to work.
 
 | Command | Who | What it does |
 |---|---|---|
-| `bzz start` / `bzz stop` | owner | start the loop in the background and open the dashboard (`--foreground`, `--rounds N`, `--round-minutes M`), or stop starting new agents |
+| `bzz start` / `bzz stop` | owner | start the loop in the background and open the dashboard (`--no-browser` suppresses the browser; also `--foreground`, `--rounds N`, `--round-minutes M`), or stop starting new agents |
 | `bzz gui [--detach] [--project p]` | owner | open the browser dashboard |
 | `bzz web setup` / `off` / `start` / `stop` / `restart` | owner | configure network access or control the independent web listener; see the [web guide](docs/WEB-API.md) |
 | `bzz stop --force` | owner | show the warning and immediately stop running work and the Orchestrator; the web server remains available |

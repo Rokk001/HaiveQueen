@@ -16,11 +16,23 @@ from haivequeen.stable_launcher import lifetime_lock
 
 
 class DatabaseTransitionTests(RoundCase):
+    def test_failed_restart_preserves_start_command_error(self):
+        def failed(*args, **kwargs):
+            kwargs['stdout'].write('Unable to acquire core lock')
+            return subprocess.CompletedProcess(args[0], 1)
+        with patch.object(selfupdate.subprocess, 'run', side_effect=failed):
+            with self.assertRaisesRegex(RuntimeError, 'exit 1.*Unable to acquire core lock'):
+                selfupdate.start_release_core(self.base)
+
     def test_automatic_restart_does_not_open_setup_browser(self):
+        from haivequeen import cli
         with patch.object(selfupdate.subprocess, 'run') as run:
             run.return_value.returncode = 0
             self.assertTrue(selfupdate.start_release_core(self.base))
         self.assertIn('--no-browser', run.call_args.args[0])
+        args, extra = cli.build_parser().parse_known_args(run.call_args.args[0][3:])
+        self.assertEqual(extra, [])
+        self.assertTrue(args.no_browser)
 
     def test_rejected_publication_respects_preexisting_pause(self):
         fixture = self.fixture()

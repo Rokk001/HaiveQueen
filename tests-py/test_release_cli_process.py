@@ -45,10 +45,10 @@ class ReleaseCliProcessTest(RoundCase):
     def test_public_install_stages_downloaded_archive(self):
         self._compatible_switch(public=True, download=True, launched=True, adoption=True)
 
-    def test_published_unknown_waits_for_jobs(self):
+    def test_published_unknown_defers_without_stopping_jobs(self):
         self._compatible_switch(public=True, download=True, incompatible=True, reason=release_compat.UNKNOWN_REASON)
 
-    def test_published_unknown_forces_jobs(self):
+    def test_published_unknown_cannot_be_forced(self):
         self._compatible_switch(public=True, download=True, incompatible=True, force=True, reason=release_compat.UNKNOWN_REASON)
 
     def test_public_install_rolls_back_after_missing_successor_receipt(self):
@@ -68,7 +68,7 @@ class ReleaseCliProcessTest(RoundCase):
         self._compatible_switch(public=True, incompatible=True, force=True, web='tray')
 
     def test_shared_settings_change_waits_for_jobs_then_switches(self):
-        self._compatible_switch(public=True, incompatible=True, reason="shared settings format change")
+        self._compatible_switch(public=True, incompatible=True, adoption=True, reason="shared settings format change")
 
     def test_incompatible_public_install_forces_jobs_then_switches(self):
         self._compatible_switch(public=True, incompatible=True, force=True)
@@ -91,13 +91,9 @@ class ReleaseCliProcessTest(RoundCase):
             port = sock.getsockname()[1]
         web_auth.setup(self.base / 'cfg' / 'config.toml', 'test', 'test', '127.0.0.1', port, '', '')
         web_auth.off(self.base / 'cfg' / 'config.toml')
-        package = root / 'versions' / '1.0.0' / 'haivequeen'
-        access = package / 'web_access.py'
-        with access.open('a', encoding='utf-8') as f:
-            f.write("\n_original_page = page\ndef page(*args, **kwargs):\n    return _original_page(*args, **kwargs).replace('</body>', " + repr("<script>fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'test',password:'test'})}).then(()=>location.href='/')</script>") + "+'</body>')\n")
         return browser
 
-    def _browser_force(self, browser, jobs, detached):
+    def _browser_force(self, browser, jobs, detached, reason):
         status = web_service.control('status')
         self.assertTrue(status and status['running'], str(status))
         profile = self.base / 'browser-profile'
@@ -105,7 +101,7 @@ class ReleaseCliProcessTest(RoundCase):
         if not shutil.which('node'):
             self.skipTest('Node is required')
         log = (self.base / 'browser-driver.log').open('w', encoding='utf-8')
-        process = subprocess.Popen(['node', str(driver), browser, status['url']+'/login', str(profile)],
+        process = subprocess.Popen(['node', str(driver), browser, status['url']+'/login', str(profile), reason],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True)
         try:
             self.assertEqual(read_line(process), 'CANCELLED')
@@ -118,80 +114,79 @@ class ReleaseCliProcessTest(RoundCase):
         finally:
             if process.poll() is None:
                 process.terminate(); process.wait(timeout=10)
+            process.stdin.close()
+            process.stdout.close()
             log.close()
 
     def _compatible_switch(self, public, download=False, rollback=False, incompatible=False, force=False,
                            reason="shared schema change", adoption=False, launched=False, scheduling=False, resume=False, web=False, database=False):
+        settings_change = reason == 'shared settings format change'
+        if incompatible and reason == 'shared schema change':
+            database = True
+            reason = ('Database column providers_usage.actions becomes actions_json; '
+                      'older HQ usage writers require actions (affected versions: 1.0.0)')
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent
-        for version in (('1.0.0',) if download else ('1.0.0', '2.0.0')):
-            dest = root / 'versions' / version
-            shutil.copytree(source / 'haivequeen', dest / 'haivequeen',
-                            ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-            shutil.copytree(source / 'roles', dest / 'roles')
         server = None
         requests = []
-        if download:
-            from release_authority_fixture import authority, responses, package_files, database_break
-            from haivequeen import release_staging
-            reply = {}
-            class ReleaseHandler(BaseHTTPRequestHandler):
-                def do_GET(self):
-                    requests.append((self.path, self.headers.get('User-Agent')))
-                    suffix = '/' + self.path.split('/', 4)[4]
-                    data = reply.get(suffix)
-                    self.send_response(200 if data is not None else 404)
-                    data = data or b'not found'
-                    self.send_header('Content-Length', str(len(data)))
-                    self.end_headers()
-                    self.wfile.write(data)
-                def log_message(self, format, *args):
-                    pass
-            server = ThreadingHTTPServer(('127.0.0.1', 0), ReleaseHandler)
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            files = package_files(source)
-            api = 'http://127.0.0.1:%s/repos/' % server.server_port
-            files['haivequeen/release_staging.py'] = files['haivequeen/release_staging.py'].replace(
-                b'https://api.github.com/repos/', api.encode())
-            # Only test pacing changes; both authenticated releases contain it.
-            files['haivequeen/selfupdate.py'] = files['haivequeen/selfupdate.py'].replace(
-                b'poll=5.0,\n                       timeout=ROUND_TIMEOUT',
-                b'poll=0.1,\n                       timeout=ROUND_TIMEOUT')
-            files['haivequeen/release_message.py'] = b'MESSAGE = "old application message"\n'
-            if database:
-                files['haivequeen/shared-contract.json'] = b'{"format":1,"database":"usage-actions-v1"}\n'
-            old_authority = authority(files, '1.0.0')
-            files = dict(files)
-            files['haivequeen/release_message.py'] = b'MESSAGE = "new application message"\n'
-            if database:
-                files = database_break(files)
-            target_authority = authority(files, '2.0.0')
-            reply.update(responses({'1.0.0': old_authority, '2.0.0': target_authority}))
-            shutil.rmtree(root / 'versions' / '1.0.0')
-            def fetch(address):
-                from urllib.request import Request, urlopen
-                request = Request(address.replace('https://api.github.com/repos/', api),
-                                  headers={'User-Agent': 'HaiveQueen'})
-                with urlopen(request, timeout=15) as response:
-                    return response.read()
-            release_staging.stage_release(root, updates.repository(self.machine), '1.0.0', fetch)
-        else:
-            (root / 'versions' / '2.0.0' / 'haivequeen-update.json').write_text(
-                (json.dumps({'compatible_with_older': False, 'reason': reason})
-                 if incompatible else '{"compatible_with_older": true}'), encoding='utf-8')
+        from release_authority_fixture import authority, responses, package_files, database_break, settings_break
+        from haivequeen import release_staging
+        reply = {}
+        class ReleaseHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests.append((self.path, self.headers.get('User-Agent')))
+                suffix = '/' + self.path.split('/', 4)[4]
+                data = reply.get(suffix)
+                self.send_response(200 if data is not None else 404)
+                data = data or b'not found'
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            def log_message(self, format, *args):
+                pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), ReleaseHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        files = package_files(source)
+        api = 'http://127.0.0.1:%s/repos/' % server.server_port
+        files['haivequeen/release_staging.py'] = files['haivequeen/release_staging.py'].replace(
+            b'https://api.github.com/repos/', api.encode())
+        # Only test pacing changes; both authenticated releases contain it.
+        files['haivequeen/selfupdate.py'] = files['haivequeen/selfupdate.py'].replace(
+            b'poll=5.0,\n                       timeout=ROUND_TIMEOUT',
+            b'poll=0.1,\n                       timeout=ROUND_TIMEOUT')
+        files['haivequeen/release_message.py'] = b'MESSAGE = "old application message"\n'
+        if database:
+            files['haivequeen/shared-contract.json'] = b'{"format":1,"database":"usage-actions-v1"}\n'
         if rollback:
-            # The test version runs the real CLI and loop but cannot publish a
-            # completed-round receipt. Shorten only the isolated worker timeout.
-            target_loop = root / 'versions' / '2.0.0' / 'haivequeen' / 'loop.py'
-            code = target_loop.read_text(encoding='utf-8')
-            code = code.replace('            record_completed_round(conn)', '            pass  # simulate a failed first round')
-            target_loop.write_text(code, encoding='utf-8')
-            worker_code = root / 'versions' / '1.0.0' / 'haivequeen' / 'selfupdate.py'
-            code = worker_code.read_text(encoding='utf-8')
-            code = code.replace('ROUND_TIMEOUT = 1800.0', 'ROUND_TIMEOUT = 8.0')
-            code = code.replace('poll: float = 5.0, round_timeout:', 'poll: float = 0.1, round_timeout:')
-            worker_code.write_text(code, encoding='utf-8')
+            # Both authenticated versions contain the same test-only fault hook.
+            # Only the target suppresses its first-round receipt.
+            files['haivequeen/loop.py'] = files['haivequeen/loop.py'].replace(
+                b'            record_completed_round(conn)',
+                b"            if Path(__file__).resolve().parents[1].name != '2.0.0': record_completed_round(conn)")
+            files['haivequeen/selfupdate.py'] = files['haivequeen/selfupdate.py'].replace(
+                b'ROUND_TIMEOUT = 1800.0', b'ROUND_TIMEOUT = 30.0')
+        old_authority = authority(files, '1.0.0')
+        files = dict(files)
+        files['haivequeen/release_message.py'] = b'MESSAGE = "new application message"\n'
+        if database:
+            files = database_break(files)
+        if reason == 'shared settings format change':
+            files = settings_break(files)
+            reason = 'Shared machine settings move from config.toml to hq-machine.toml (affected versions: 1.0.0)'
+        if reason == release_compat.UNKNOWN_REASON:
+            files['haivequeen/release_message.py'] = b'import os\nMESSAGE = \"unknown shared behavior\"\n'
+        target_authority = authority(files, '2.0.0')
+        reply.update(responses({'1.0.0': old_authority, '2.0.0': target_authority}))
+        def fetch(address):
+            from urllib.request import Request, urlopen
+            request = Request(address.replace('https://api.github.com/repos/', api),
+                              headers={'User-Agent': 'HaiveQueen'})
+            with urlopen(request, timeout=15) as response:
+                return response.read()
+        release_staging.stage_release(root, updates.repository(self.machine), '1.0.0', fetch)
+        if not download:
+            release_staging.stage_release(root, updates.repository(self.machine), '2.0.0', fetch)
         version_layout.install_launcher(root)
         version_layout.set_active(root, '1.0.0')
         (self.base / 'cfg' / 'config.toml').write_text(
@@ -330,7 +325,7 @@ class ReleaseCliProcessTest(RoundCase):
                                            'job': {'step': step, 'pid': job.pid, 'file': str(result)}})
                 updates.save_state({'available': {'version': '2.0.0', 'url': 'https://example.invalid/release'}})
                 if web == 'browser':
-                    self._browser_force(browser, jobs, detached)
+                    self._browser_force(browser, jobs, detached, reason)
                     request = None
                 elif web is True:
                     # Exercise the real API against the installed version and
@@ -344,21 +339,18 @@ class ReleaseCliProcessTest(RoundCase):
                 else:
                     command = [sys.executable, '-I', str(root / 'launcher.py'), 'update', '--install', '2.0.0']
                 if web != 'browser':
-                    if database:
-                        # Detached descendants can retain inherited pipe
-                        # writers. Await the request process with the same
-                        # deadline and capture its exact output in owned files,
-                        # without waiting for unrelated pipe EOF.
-                        import tempfile
-                        with tempfile.TemporaryFile(mode='w+', encoding='utf-8') as out, tempfile.TemporaryFile(mode='w+', encoding='utf-8') as err:
-                            completed = subprocess.run(command, env=env, stdout=out, stderr=err,
-                                                       text=True, timeout=30)
-                            out.seek(0)
-                            err.seek(0)
-                            request = subprocess.CompletedProcess(command, completed.returncode,
-                                                                  out.read(), err.read())
-                    else:
-                        request = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
+                    # Detached descendants can retain inherited pipe
+                    # writers. Await the request process with the same
+                    # deadline and capture its exact output in owned files,
+                    # without waiting for unrelated pipe EOF.
+                    import tempfile
+                    with tempfile.TemporaryFile(mode='w+', encoding='utf-8') as out, tempfile.TemporaryFile(mode='w+', encoding='utf-8') as err:
+                        completed = subprocess.run(command, env=env, stdout=out, stderr=err,
+                                                   text=True, timeout=30)
+                        out.seek(0)
+                        err.seek(0)
+                        request = subprocess.CompletedProcess(command, completed.returncode,
+                                                              out.read(), err.read())
                     self.assertEqual(request.returncode, 0, request.stdout + request.stderr)
                 if web == 'browser':
                     pass
@@ -366,6 +358,31 @@ class ReleaseCliProcessTest(RoundCase):
                     self.assertIn(json.loads(request.stdout)['how'], ('detached', 'schtasks'))
                 else:
                     self.assertEqual(json.loads(request.stdout)['installing'], '2.0.0')
+                if reason == release_compat.UNKNOWN_REASON:
+                    deadline = time.monotonic() + 30
+                    row = None
+                    while time.monotonic() < deadline:
+                        row = db.last_self_update(self.conn)
+                        if row and row['ended']:
+                            break
+                        time.sleep(.05)
+                    self.assertTrue(row and row['ended'], 'unknown release was not rejected')
+                    self.assertEqual(row['result'], 'failed')
+                    self.assertIn('update deferred', row['note'])
+                    self.assertIn('unknown', row['note'].lower())
+                    self.assertEqual((root / 'active-version').read_text().strip(), '1.0.0')
+                    self.assertEqual(loop.loop_running(), old_pid)
+                    self.assertFalse(loop.stop_flag().exists())
+                    self.assertTrue(all(job.poll() is None for job in jobs))
+                    self.assertTrue(all(job.process.poll() is None for job, _, _, _ in detached))
+                    if force:
+                        refused = subprocess.run([sys.executable, '-I', str(root / 'launcher.py'), 'update', '--force'],
+                                                 env=env, capture_output=True, text=True, timeout=30)
+                        self.assertNotEqual(refused.returncode, 0, refused.stdout + refused.stderr)
+                        self.assertFalse(selfupdate.release_force_path().exists())
+                        self.assertTrue(all(job.poll() is None for job in jobs))
+                        self.assertTrue(all(job.process.poll() is None for job, _, _, _ in detached))
+                    return
                 if incompatible and web == 'browser':
                     for job in jobs:
                         job.wait(timeout=30)
@@ -379,7 +396,7 @@ class ReleaseCliProcessTest(RoundCase):
                     while time.monotonic() < deadline:
                         try:
                             status = json.loads(selfupdate.release_status_path().read_text(encoding='utf-8'))
-                            if status['waiting'] and len(status['jobs']) >= (4 if force or database else 2):
+                            if status['waiting'] and len(status['jobs']) >= (4 if force or database or settings_change else 2):
                                 break
                         except (OSError, ValueError):
                             pass
@@ -390,7 +407,7 @@ class ReleaseCliProcessTest(RoundCase):
                     self.assertTrue(status and status['waiting'], str(status))
                     self.assertEqual(status['reason'], reason)
                     self.assertEqual({j['kind'] for j in status['jobs']},
-                                     {'Queen', 'Agent', 'Build', 'Deploy'} if force or database else {'Queen', 'Agent'})
+                                     {'Queen', 'Agent', 'Build', 'Deploy'} if force or database or settings_change else {'Queen', 'Agent'})
                     self.assertEqual((root / 'active-version').read_text().strip(), '1.0.0')
                     self.assertTrue(loop.stop_flag().exists())
                     self.assertTrue(all(job.poll() is None for job in jobs))
@@ -411,7 +428,7 @@ class ReleaseCliProcessTest(RoundCase):
                     self.assertTrue(reported['waiting'])
                     self.assertEqual(reported['reason'], status['reason'])
                     self.assertEqual({j['kind'] for j in reported['jobs']},
-                                     {'Queen', 'Agent', 'Build', 'Deploy'} if force or database else {'Queen', 'Agent'})
+                                     {'Queen', 'Agent', 'Build', 'Deploy'} if force or database or settings_change else {'Queen', 'Agent'})
                     self.assertTrue(all(job.poll() is None for job in jobs))
                     if force:
                         if web == 'tray':
@@ -493,6 +510,10 @@ class ReleaseCliProcessTest(RoundCase):
                 import sqlite3
                 with self.assertRaises(sqlite3.OperationalError):
                     runtime.usage_add(self.conn, actions='old writer')
+            if reason.startswith('Shared machine settings move'):
+                self.assertFalse((self.base / 'cfg/config.toml').exists())
+                self.assertTrue((self.base / 'cfg/hq-machine.toml').is_file())
+                self.assertEqual(self.conn.execute('PRAGMA user_version').fetchone()[0], 17)
             if rollback:
                 self.assertIn('rolled back', row['note'])
                 fault = json.loads(runtime.kv_get(self.conn, scheduler.GLOBAL, 'global-fault:self_update_rollback'))
@@ -541,7 +562,7 @@ class ReleaseCliProcessTest(RoundCase):
                 git('config', 'user.email', 'test@example.invalid')
                 git('add', '--', '.haivequeen/project.toml', plan_path)
                 git('commit', '-qm', 'Create isolated plan')
-                git('branch', 'feature')
+                git('update-ref', 'refs/remotes/origin/main', 'HEAD')
                 deadline = time.monotonic() + 40
                 row = None
                 while time.monotonic() < deadline:
@@ -550,7 +571,7 @@ class ReleaseCliProcessTest(RoundCase):
                         row = rows[-1]
                         break
                     time.sleep(.1)
-                self.assertIsNotNone(row, 'successor did not schedule a Queen')
+                self.assertIsNotNone(row, 'successor did not schedule a Queen: ' + repr([dict(r) for r in self.conn.execute("SELECT kind,text FROM events ORDER BY id DESC LIMIT 12")]))
                 marker = self.base / (row['name'] + '-started')
                 deadline = time.monotonic() + 30
                 while not marker.exists() and time.monotonic() < deadline:
@@ -622,19 +643,6 @@ class ReleaseCliProcessTest(RoundCase):
                 time.sleep(.05)
             if core is not None:
                 core.wait(timeout=10)
-            # Await only the test-owned successor's inherited log handle.
-            deadline = time.monotonic() + 30
-            core_log = platform.runs_dir() / 'beekeeper.log'
-            while core_log.exists():
-                try:
-                    probe = core_log.with_suffix('.closed')
-                    core_log.rename(probe)
-                    probe.rename(core_log)
-                    break
-                except PermissionError:
-                    if time.monotonic() >= deadline:
-                        raise
-                    time.sleep(.05)
             # A core can return before its independently spawned web service
             # publishes its control endpoint. Stop that owned service once it
             # is reachable and wait for its inherited log handle to close.
@@ -647,6 +655,20 @@ class ReleaseCliProcessTest(RoundCase):
                         probe = log.with_suffix('.closed')
                         log.rename(probe)
                         probe.rename(log)
+                    break
+                except PermissionError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(.05)
+
+            # Await only the test-owned successor's inherited log handle.
+            deadline = time.monotonic() + 30
+            core_log = platform.runs_dir() / 'beekeeper.log'
+            while core_log.exists():
+                try:
+                    probe = core_log.with_suffix('.closed')
+                    core_log.rename(probe)
+                    probe.rename(core_log)
                     break
                 except PermissionError:
                     if time.monotonic() >= deadline:

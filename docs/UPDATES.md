@@ -14,4 +14,10 @@ While the update waits, the dashboard and the Windows tray offer force. They war
 
 If publication is rejected after the incompatible-update wait, the update remains failed. HaiveQueen verifies a completed round of the previous core before restoring scheduling. Missing recovery evidence keeps scheduling paused and is reported explicitly. An existing owner pause or stop is preserved. Automatic core restarts do not open browser or setup windows.
 
+A failed core start retains the start command's exit code and error in the update failure report, including failures while restarting the previous version.
+
+`bzz start --no-browser` starts the core without opening the dashboard in a browser. Automatic update restarts use this option together with `--keep-pause` so only verified recovery restores scheduling.
+
+Compatibility support is conservative: authenticated source identity and supported shared consumers are checked again at publication. Unknown changes remain deferred and cannot be forced. The supported settings transition moves machine configuration from `config.toml` to `hq-machine.toml` only for a release whose complete set of consumers matches that contract. It drains existing work just like the supported database transition. Settings move under shared-data and launch coordination; rollback preserves the latest contents. Conflicting files are retained and reported instead of overwritten. This does not rename configuration in existing installations merely by installing this code.
+
 The older checkout-only `bzz self-update` is a one-time transition and is retired once a release is published or the checkout is at a release tag. It is separate from the release workflow above.
