@@ -1027,7 +1027,7 @@ def spawn_detached(argv: list, log: Path, env: dict = None) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     flags = {"creationflags": 0x08000000 | 0x00000200} if osplat.is_windows() else {"start_new_session": True}   # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     with open(log, "ab") as out:
-        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, env={**os.environ, **env} if env else None, **flags)
+        osplat.popen_outside_job(subprocess.Popen, argv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, env={**os.environ, **env} if env else None, **flags)
 
 
 # Print the command result and retain it for optional desktop feedback.

@@ -104,3 +104,15 @@ Pipeline regressions supply a completed acceptance reviewer at the review bounda
 the dedicated acceptance tests cover scheduling, validation and caching. Update API
 tests check the displayed state after refresh, not the raw refresh return value.
 Draft creation, draft saving and global plan actions have German log translations.
+
+## Loop and web service outside the agent's job
+
+On Windows an agent CLI such as Codex runs its commands inside a job object that
+ends every member process when the agent ends. When a `bzz` command from such an
+agent started the orchestrator loop or the web service, both ended together with
+that agent, and with them the agents the loop had started (observed on 2026-11-16:
+loop, web service and a diagnosis Agent ended when a Codex Queen ended, and nothing
+ran until the next manual start). `bzz start` and the web service therefore start
+their processes with `CREATE_BREAKAWAY_FROM_JOB`; a job that forbids breakaway
+refuses the flag and the process starts as before.
+Focused regression: `python -m unittest discover -s tests-py -p test_outside_agent_job.py -v`.

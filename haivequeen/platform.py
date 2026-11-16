@@ -449,6 +449,23 @@ def _posix_kill_tree(pid: int, grace: float = 2.0) -> bool:
     return not _posix_process_alive(pid)
 
 
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+
+
+def popen_outside_job(popen, *args, creationflags=0, **kwargs):
+    """Start a long-lived HaiveQueen process outside the Windows job of its caller.
+
+    An agent CLI (Codex) runs its commands in a job that ends every member when the agent ends; a loop or web
+    service started from such a command would end with that agent, together with the agents the loop started.
+    A job that forbids breakaway refuses the flag: then start as before."""
+    if not is_windows():
+        return popen(*args, **kwargs)
+    try:
+        return popen(*args, creationflags=creationflags | CREATE_BREAKAWAY_FROM_JOB, **kwargs)
+    except OSError:
+        return popen(*args, creationflags=creationflags, **kwargs)
+
+
 def kill_process_tree(pid) -> bool:
     """End a process and its children; return True when it is gone. Never raises.
 
