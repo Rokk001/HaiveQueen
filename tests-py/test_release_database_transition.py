@@ -11,11 +11,85 @@ from unittest.mock import patch
 from bzztest import RoundCase
 import test_release_compatibility_switch as fixtures
 from release_authority_fixture import database_break
-from haivequeen import config, db, loop, release_activation, release_contract, release_staging, runtime, selfupdate, updates, version_leases
+from haivequeen import config, db, loop, release_activation, release_contract, release_staging, runtime, runstate, selfupdate, updates, version_leases
 from haivequeen.stable_launcher import lifetime_lock
 
 
 class DatabaseTransitionTests(RoundCase):
+    def test_automatic_restart_does_not_open_setup_browser(self):
+        with patch.object(selfupdate.subprocess, 'run') as run:
+            run.return_value.returncode = 0
+            self.assertTrue(selfupdate.start_release_core(self.base))
+        self.assertIn('--no-browser', run.call_args.args[0])
+
+    def test_rejected_publication_respects_preexisting_pause(self):
+        fixture = self.fixture()
+        runstate.pause(self.conn, 'existing owner pause')
+        receipts = []
+        with patch.object(release_staging, '_fetch', fixture.fetch), patch.object(updates, 'repository', return_value='example/project'):
+            result = selfupdate.run_release_update(self.conn, fixture.root, '2.0.0',
+                                                  activate=lambda *a, **k: (_ for _ in ()).throw(RuntimeError('publication rejected')),
+                                                  jobs=lambda c: [], loop_pid=lambda: None,
+                                                  start=lambda: True,
+                                                  receipt=lambda *a, **k: receipts.append(True) or True,
+                                                  poll=.01, timeout=.1)
+        self.assertEqual(result['result'], 'failed', result)
+        self.assertEqual(receipts, [True])
+        self.assertFalse(runstate.starts_allowed(self.conn))
+
+    def test_rejected_publication_does_not_restart_after_owner_stop(self):
+        fixture = self.fixture()
+        started = []
+        def reject(*args, **kwargs):
+            loop.stop_flag().write_text('owner requested stop', encoding='utf-8')
+            raise RuntimeError('publication rejected')
+        with patch.object(release_staging, '_fetch', fixture.fetch), patch.object(updates, 'repository', return_value='example/project'):
+            result = selfupdate.run_release_update(self.conn, fixture.root, '2.0.0', activate=reject,
+                                                  jobs=lambda c: [], loop_pid=lambda: None,
+                                                  start=lambda: started.append(True) or True,
+                                                  receipt=lambda *a, **k: True,
+                                                  poll=.01, timeout=.1)
+        self.assertEqual(result['result'], 'failed', result)
+        self.assertEqual(started, [])
+        self.assertFalse(runstate.starts_allowed(self.conn))
+        self.assertEqual(loop.stop_flag().read_text(), 'owner requested stop')
+
+    def test_rejected_publication_requires_old_round_before_resuming(self):
+        fixture = self.fixture()
+        root = fixture.root
+        observed = []
+
+        def reject(*args, **kwargs):
+            self.assertFalse(runstate.starts_allowed(self.conn))
+            raise RuntimeError('target verification failed')
+
+        def receipt(conn, target, *args, **kwargs):
+            observed.append(target.name)
+            self.assertFalse(runstate.starts_allowed(conn))
+            return True
+
+        with patch.object(release_staging, '_fetch', fixture.fetch), patch.object(updates, 'repository', return_value='example/project'):
+            result = selfupdate.run_release_update(self.conn, root, '2.0.0', activate=reject,
+                                                  jobs=lambda c: [], loop_pid=lambda: None,
+                                                  start=lambda: True, receipt=receipt,
+                                                  poll=.01, timeout=.1)
+        self.assertEqual(result['result'], 'failed', result)
+        self.assertEqual(observed, ['1.0.0'])
+        self.assertTrue(runstate.starts_allowed(self.conn))
+        self.assertIn('old core recovery verified', result['note'])
+
+    def test_rejected_publication_keeps_pause_without_old_round(self):
+        fixture = self.fixture()
+        with patch.object(release_staging, '_fetch', fixture.fetch), patch.object(updates, 'repository', return_value='example/project'):
+            result = selfupdate.run_release_update(self.conn, fixture.root, '2.0.0',
+                                                  activate=lambda *a, **k: (_ for _ in ()).throw(RuntimeError('publication rejected')),
+                                                  jobs=lambda c: [], loop_pid=lambda: None,
+                                                  start=lambda: True, receipt=lambda *a, **k: False,
+                                                  poll=.01, timeout=.1)
+        self.assertEqual(result['result'], 'failed', result)
+        self.assertFalse(runstate.starts_allowed(self.conn))
+        self.assertIn('old core recovery not verified', result['note'])
+
     def test_start_command_returns_while_successor_keeps_output_handle(self):
         root = self.base / 'start-fixture'
         root.mkdir()

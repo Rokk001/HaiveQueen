@@ -392,7 +392,7 @@ def start_release_core(root):
     root = Path(root)
     with tempfile.TemporaryFile(mode='w+', encoding='utf-8') as output:
         result = subprocess.run([osplat.python_executable(), '-I', str(root / 'launcher.py'),
-                                 'start', '--keep-pause'], cwd=root, stdin=subprocess.DEVNULL,
+                                 'start', '--keep-pause', '--no-browser'], cwd=root, stdin=subprocess.DEVNULL,
                                 stdout=output, stderr=subprocess.STDOUT)
     return result.returncode == 0
 
@@ -418,6 +418,10 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
     row = None
     resume_after = False
     installations = {}
+    recovered = [False]
+    recovery_attempted = [False]
+    recover_old = None
+    waiting_started = False
     try:
         old = (root / 'active-version').read_text(encoding='utf-8').strip()
         row = start_row(conn, old)
@@ -448,54 +452,12 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
             note = 'update deferred: ' + info['reason']
             end_row(conn, row, old, 'failed', note)
             return {'result': 'deferred', 'note': note, 'old': old, 'new': old}
-        if not info['compatible']:
-            columns = {r[1] for r in conn.execute('PRAGMA table_info(providers_usage)')}
-            if conn.execute('PRAGMA user_version').fetchone()[0] != 17 or 'actions' not in columns or 'actions_json' in columns:
-                note = 'update deferred: unsupported current database contract'
-                end_row(conn, row, old, 'failed', note)
-                return {'result': 'deferred', 'note': note, 'old': old, 'new': old}
-            resume_after = runstate.starts_allowed(conn)
-            status = release_compat.begin_wait(conn, target, jobs=jobs, decision=info)
-            # STOP excludes new work while old work completes. The pause also
-            # holds new starts after the successor clears STOP, until its first
-            # round has proved successful (or recovery has proved the old one).
-            runstate.pause(conn, 'incompatible release verification')
-            while True:
-                status['jobs'] = jobs(conn)
-                status['waiting'] = bool(status['jobs'] or loop_pid())
-                if not status['waiting']:
-                    # Core drain leaves the waiting interface available. Once
-                    # all work has finished, close it gracefully as well; the
-                    # stopped-core tray exits when its web service disappears.
-                    from . import web_service
-                    web_service.stop()
-                    with lifetime_lock(root):
-                        status['waiting'] = not release_contract.drained(root, installations, installation_token)
-                write_release_status(status)
-                if release_force_path().exists():
-                    from . import force_stop
-                    release_force_path().unlink()
-                    forced = force_stop.stop(conn)
-                    if not forced.get('ok'):
-                        raise RuntimeError(forced.get('error', 'force stop failed'))
-                    loop.stop_flag().write_text('stop requested %s (self-update incompatible release)\n' % db.now(), encoding='utf-8')
-                    continue
-                if owner_stopped():
-                    end_row(conn, row, old, 'skipped', 'skipped, ' + OWNER_STOP)
-                    return {'result': 'skipped', 'note': OWNER_STOP, 'old': old, 'new': old}
-                if not status['waiting']:
-                    break
-                sleep(poll)
-        began = db.now()
-        had_core = bool(loop_pid())
-        def first_round():
-            if not had_core and not start():
-                return False
-            return receipt(conn, target, began, sleep, poll, timeout, loop_pid=loop_pid)
-        recovered = [False]
         def recover_old(old_version):
             # The old reservation stays held during this callback. A successor
             # must relinquish the core lock itself; never kill a foreign process.
+            recovery_attempted[0] = True
+            if owner_stopped() or (not info['compatible'] and jobs(conn)):
+                return
             deadline = time.monotonic() + timeout
             if not info['compatible']:
                 # Never reverse shared schema while a target core can use it.
@@ -535,6 +497,51 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
             if start():
                 recovered[0] = receipt(conn, version_layout.version_dir(root, old_version), began_old,
                                        sleep, poll, timeout, loop_pid=loop_pid)
+        if not info['compatible']:
+            columns = {r[1] for r in conn.execute('PRAGMA table_info(providers_usage)')}
+            if conn.execute('PRAGMA user_version').fetchone()[0] != 17 or 'actions' not in columns or 'actions_json' in columns:
+                note = 'update deferred: unsupported current database contract'
+                end_row(conn, row, old, 'failed', note)
+                return {'result': 'deferred', 'note': note, 'old': old, 'new': old}
+            resume_after = runstate.starts_allowed(conn)
+            waiting_started = True
+            status = release_compat.begin_wait(conn, target, jobs=jobs, decision=info)
+            # STOP excludes new work while old work completes. The pause also
+            # holds new starts after the successor clears STOP, until its first
+            # round has proved successful (or recovery has proved the old one).
+            runstate.pause(conn, 'incompatible release verification')
+            while True:
+                status['jobs'] = jobs(conn)
+                status['waiting'] = bool(status['jobs'] or loop_pid())
+                if not status['waiting']:
+                    # Core drain leaves the waiting interface available. Once
+                    # all work has finished, close it gracefully as well; the
+                    # stopped-core tray exits when its web service disappears.
+                    from . import web_service
+                    web_service.stop()
+                    with lifetime_lock(root):
+                        status['waiting'] = not release_contract.drained(root, installations, installation_token)
+                write_release_status(status)
+                if release_force_path().exists():
+                    from . import force_stop
+                    release_force_path().unlink()
+                    forced = force_stop.stop(conn)
+                    if not forced.get('ok'):
+                        raise RuntimeError(forced.get('error', 'force stop failed'))
+                    loop.stop_flag().write_text('stop requested %s (self-update incompatible release)\n' % db.now(), encoding='utf-8')
+                    continue
+                if owner_stopped():
+                    end_row(conn, row, old, 'skipped', 'skipped, ' + OWNER_STOP)
+                    return {'result': 'skipped', 'note': OWNER_STOP, 'old': old, 'new': old}
+                if not status['waiting']:
+                    break
+                sleep(poll)
+        began = db.now()
+        had_core = bool(loop_pid())
+        def first_round():
+            if not had_core and not start():
+                return False
+            return receipt(conn, target, began, sleep, poll, timeout, loop_pid=loop_pid)
         if not release_staging.verify_installed(target, repository, version):
             raise RuntimeError('installed release changed before activation')
         def can_publish():
@@ -568,8 +575,16 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
     except Exception as exc:
         note = 'release update failed: ' + str(exc)
         try:
-            if old and (root / 'active-version').read_text(encoding='utf-8').strip() == old and not loop_pid():
-                start()
+            if (waiting_started and recover_old is not None and not owner_stopped()
+                    and (root / 'active-version').read_text(encoding='utf-8').strip() == old):
+                if not recovery_attempted[0]:
+                    recover_old(old)
+                if recovered[0]:
+                    if resume_after:
+                        runstate.resume(conn, 'release failure recovery round verified')
+                    note += '; old core recovery verified'
+                else:
+                    note += '; old core recovery not verified; scheduling remains paused'
         except Exception as recovery_exc:
             note += '; old core recovery failed: ' + str(recovery_exc)
         if row is not None:

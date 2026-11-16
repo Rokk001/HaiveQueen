@@ -12,4 +12,6 @@ A release whose shared changes cannot safely coexist with running older versions
 
 While the update waits, the dashboard and the Windows tray offer force. They warn that all running work will stop immediately and unfinished work will be repeated; force proceeds only after confirmation. On the command line, `bzz update --force` prints the warning and its explicit flag is the confirmation. After restart, plans continue from their recorded state.
 
+If publication is rejected after the incompatible-update wait, the update remains failed. HaiveQueen verifies a completed round of the previous core before restoring scheduling. Missing recovery evidence keeps scheduling paused and is reported explicitly. An existing owner pause or stop is preserved. Automatic core restarts do not open browser or setup windows.
+
 The older checkout-only `bzz self-update` is a one-time transition and is retired once a release is published or the checkout is at a release tag. It is separate from the release workflow above.
