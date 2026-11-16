@@ -581,6 +581,7 @@ class AgentRun:
         self.task_desc = {}   # description of each Task call of the Queen by tool use id: it names the subagent Bee
         self.sub_started = set()   # subagents whose start context is stored
         self.start_ctx = 0   # the context of the first model turn of this run (the start context)
+        self.agent_waits = 0   # native calls that only waited for a subagent: each is a model turn over the whole context
         self.start_parts = {}   # approximate parts of HaiveQueen in the start context: role file, project rules files, task
         self.cache_read, self.cache_write = (None, None) if protocol == "codex" else (0, 0)   # cached and newly cached input tokens; None = the CLI reports none
         self.context_limit = CONTEXT_LIMIT
@@ -675,6 +676,7 @@ class AgentRun:
             runtime.upsert_agent(self.conn, self.project, self.name, {
                 "tokensIn": tin, "tokensOut": tout, "ctxTokens": self.ctx, "lastLine": self.last,
                 **({"startCtx": self.start_ctx} if self.start_ctx else {}),
+                **({"agentWaits": self.agent_waits} if self.agent_waits else {}),
                 **({"cacheRead": self.cache_read, "cacheWrite": self.cache_write} if self.cache_read is not None else {}),
                 **({"subCtx": self.sub_ctx} if self.sub_ctx or (self.type == "codex" and self.phase == "queen") else {})})
         except Exception:
@@ -896,6 +898,8 @@ class AgentRun:
                         self.say(info["label"], "Cyan")
                     else:
                         self.say_result(info, str(item.get("aggregated_output") or ""), item.get("exit_code"), False)
+            elif it == "collab_tool_call" and item.get("tool") == "wait":
+                self.agent_waits += 1
             elif it == "file_change":
                 for ch in item.get("changes") or []:
                     if isinstance(ch, dict) and ch.get("path"):
@@ -1318,7 +1322,7 @@ def run_agent(a, out=None):
     run.push_state(True)
     report_tin, report_tout = run.report_tokens()
     run.set_agent_retry({"status": status, "endedAt": db.now(), "exitCode": code, "stalledAt": "", "tokensIn": report_tin, "tokensOut": report_tout, "lastLine": run.last, "ctxTokens": run.ctx, "subCtx": run.sub_ctx,
-                         **({"startCtx": run.start_ctx} if run.start_ctx else {}), **({"cacheRead": run.cache_read, "cacheWrite": run.cache_write} if run.cache_read is not None else {}),
+                         **({"startCtx": run.start_ctx} if run.start_ctx else {}), **({"agentWaits": run.agent_waits} if run.agent_waits else {}), **({"cacheRead": run.cache_read, "cacheWrite": run.cache_write} if run.cache_read is not None else {}),
                          "interrupted": kind, "retryAt": ""})
     if run.final and (a.phase == "queen" or short(run.final, 1500) != short(run.last_said, 1500)):
         run.say("Final message: " + run.final, "Green" if status == "done" else "Red")

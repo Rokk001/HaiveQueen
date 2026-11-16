@@ -116,3 +116,12 @@ ran until the next manual start). `bzz start` and the web service therefore star
 their processes with `CREATE_BREAKAWAY_FROM_JOB`; a job that forbids breakaway
 refuses the flag and the process starts as before.
 Focused regression: `python -m unittest discover -s tests-py -p test_outside_agent_job.py -v`.
+
+## Waits of a Queen for her subagents
+
+Besides tokens, cached input and the start context, the agent row of a run stores
+`agentWaits` (in its extra fields): the native calls that only waited for a
+subagent. Each such call is a model turn over the whole context; a value above
+zero for a Queen shows polling, which HaiveQueen avoids by running Agents of
+non-blocking subagent protocols as processes. Rows without the value had none.
+Focused regression: `python -m unittest discover -s tests-py -p test_agent_wait_count.py -v`.
