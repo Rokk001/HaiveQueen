@@ -952,6 +952,7 @@ def _report_attempt(env, plan, package, cls, outcome, attempt, open_requirements
         package_diagnosis.request(env, plan, package, cls)
     if outcome == 'succeeded':
         env.conn.execute('DELETE FROM bee_assignments WHERE project=? AND plan_path=? AND package=?', (env.name, plan, package))
+        db.retire_notes(env.conn, env.name, plan, package)   # technical notes of a finished package no longer hold
         from . import package_diagnosis
         package_diagnosis.completed(env, plan, package)
     threshold = int(env.settings.get('escalateAfter', 3))

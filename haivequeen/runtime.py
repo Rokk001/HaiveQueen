@@ -716,9 +716,12 @@ def add_decision(conn, project, source, text, plan=None, item=None) -> int:
     with db.transaction(conn):
         if item == "owner-release" and plan:
             conn.execute("UPDATE decisions SET status='superseded' WHERE project=? AND plan_path=? AND item='owner-release'", (project, plan))
-        return conn.execute(
+        new_id = conn.execute(
             "INSERT INTO decisions (project, ts, source, text, plan_path, item) VALUES (?,?,?,?,?,?)",
             (project, db.now(), source, text, plan, item)).lastrowid
+        if source != "owner":
+            db.retire_notes(conn, project, plan, item, new_id)
+        return new_id
 
 
 def mark_decisions_delivered(conn, agent, decisions) -> None:

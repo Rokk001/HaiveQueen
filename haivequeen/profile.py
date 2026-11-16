@@ -429,6 +429,73 @@ def section(text, heading_part) -> str:
     return ""
 
 
+NOTE_LIMIT = 600   # characters up to which a plan entry that is not an owner decision is embedded in full
+
+
+def embeds_in_full(decision, plan) -> bool:
+    """Owner decisions of this plan always; other entries of this plan only when short; Project-wide entries never."""
+    if decision.get("plan_path") != plan:
+        return False
+    return decision.get("source") == "owner" or len(decision.get("text") or "") <= NOTE_LIMIT
+
+
+def core_statement(text, limit=200) -> str:
+    """The first sentence or line of a text, at most `limit` characters."""
+    first = re.split(r"(?<=[.!?])\s|\n", (text or "").strip(), maxsplit=1)[0]
+    return first if len(first) <= limit else first[:limit - 1].rstrip() + "…"
+
+
+def shortened(decision, plan) -> bool:
+    """Whether the start shows only the core statement of a decision."""
+    return not embeds_in_full(decision, plan) and core_statement(decision.get("text")) != (decision.get("text") or "").strip()
+
+
+def decision_line(d, plan) -> str:
+    """One decision for the Queen start: in full, or as [summary] with id and core statement."""
+    where = " (plan %s)" % d["plan_path"] if d.get("plan_path") else ""
+    if not shortened(d, plan):
+        return "- #%s%s: %s" % (d["id"], where, d["text"])
+    return "- #%s%s [summary%s]: %s" % (d["id"], where, ", item %s" % d["item"] if d.get("item") else "", core_statement(d["text"]))
+
+
+def compact_state(state, keep_last_handoff=True) -> str:
+    """The state file without what a start does not need: older handoff sections, handoff notes in
+    Completeness and the evidence of done entries. Everything stays in the file itself."""
+    sections = re.split(r"(?m)^(?=## )", state)
+    handoffs = [i for i, text in enumerate(sections) if re.match(r"## Handoff\b", text)]
+    keep = handoffs[-1] if keep_last_handoff and handoffs else None
+    out, dropped_sections, dropped_notes, done = [], 0, 0, []
+    for i, text in enumerate(sections):
+        if i in handoffs and i != keep:
+            dropped_sections += 1
+            continue
+        if re.match(r"## Completeness\b", text):
+            kept = []
+            for block in re.split(r"\n[ \t]*\n", text):
+                if re.match(r"[^\s:]+ handoff:", block.strip()):
+                    dropped_notes += 1
+                    continue
+                lines = []
+                for line in block.split("\n"):
+                    m = re.match(r"\s*-\s*([\w.-]+):\s*done\b", line)
+                    if m:
+                        done.append(m.group(1))
+                    else:
+                        lines.append(line)
+                if "\n".join(lines).strip():
+                    kept.append("\n".join(lines).rstrip())
+            text = "\n\n".join(kept)
+            if done:
+                text += "\n- Done (evidence in the state file): " + ", ".join(done)
+            text += "\n\n"
+        out.append(text)
+    result = "".join(out).strip()
+    if dropped_sections or dropped_notes or done:
+        result += ("\n\nNot embedded here, read the state file when needed: %d older handoff sections, %d handoff notes "
+                   "and the evidence of %d done entries." % (dropped_sections, dropped_notes, len(done)))
+    return result
+
+
 def queen_load(conn, project, workspace, plan, predecessor=None, agent=None) -> str:
     """What a Queen loads besides her role file and the project rules: the plan, the plan's state file, the handoff of her predecessor (if any), and the
     decisions and the owner answers of her Project. Nothing else."""
@@ -447,6 +514,7 @@ def queen_load(conn, project, workspace, plan, predecessor=None, agent=None) -> 
     handoff = section(state, "handoff " + str(predecessor)) if predecessor and state else ""
     if handoff:
         state = state.replace(handoff, "").strip()
+    state = compact_state(state, keep_last_handoff=not handoff) if state else state
     parts.append("# Plan %s\n\n%s" % (plan, read(plan_file)))
     parts.append("# State file %s\n\n%s" % (state_file.name, state or "(none yet)"))
     if predecessor:
@@ -455,7 +523,9 @@ def queen_load(conn, project, workspace, plan, predecessor=None, agent=None) -> 
     decisions = [d for d in all_decisions if d["status"] == "active" and (not d["plan_path"] or d["plan_path"] == plan)]
     if agent:   # what the start prompt shows is delivered; the bzz answers of this Queen do not repeat it
         runtime.mark_decisions_delivered(conn, agent, [d for d in decisions if d["source"] == "owner"])
-    parts.append("# Decisions of this plan and Project\n\n" + ("\n".join("- #%s%s: %s" % (d["id"], " (plan %s)" % d["plan_path"] if d.get("plan_path") else "", d["text"]) for d in decisions) or "(none)"))
+    parts.append("# Decisions of this plan and Project\n\n" + ("\n".join(decision_line(d, plan) for d in decisions) or "(none)")
+                 + ("\n\nEntries marked [summary] are shortened: read their full text with bzz decisions list --project %s when you need it." % json.dumps(project)
+                    if any(shortened(d, plan) for d in decisions) else ""))
     # Answered questions normally have a decision containing the question and answer.
     # Keep older orphan answers, without reviving answers whose decision was superseded.
     decision_texts = {d["text"] for d in all_decisions}

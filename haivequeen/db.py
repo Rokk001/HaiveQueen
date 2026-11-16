@@ -11,7 +11,7 @@ from . import platform as osplat
 from . import filetxn
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 BUSY_TIMEOUT_MS = 10000
 
 
@@ -179,6 +179,30 @@ def mark_existing_apiaries(conn: sqlite3.Connection) -> None:
             conn.execute("UPDATE projects SET legacy_deploy=1")
 
 
+# Entries that are not the owner's (technical answers, status notes) hold only while their
+# cause is open: a newer one for the same plan item replaces them, a finished package ends them.
+def retire_notes(conn, project, plan, item, keep=None) -> int:
+    """Supersede the active non-owner decisions of one plan item except `keep`; return how many."""
+    if not plan or not item:
+        return 0
+    return conn.execute("UPDATE decisions SET status='superseded' WHERE project=? AND plan_path=? AND item=? AND source!='owner' "
+                        "AND status='active' AND id!=?", (project, plan, item, keep or -1)).rowcount
+
+
+def retire_finished_notes(conn) -> None:
+    """Apply the note rule to stored decisions: keep the newest per plan item, none for a finished package."""
+    for project, plan, item, newest in conn.execute("SELECT project, plan_path, item, MAX(id) FROM decisions WHERE source!='owner' "
+                                                    "AND status='active' AND plan_path IS NOT NULL AND item IS NOT NULL "
+                                                    "GROUP BY project, plan_path, item").fetchall():
+        done = False
+        try:
+            done = conn.execute("SELECT 1 FROM package_progress WHERE project=? AND plan_path=? AND package=? AND state='done'",
+                                (project, plan, item)).fetchone() is not None
+        except sqlite3.OperationalError:
+            pass
+        retire_notes(conn, project, plan, item, None if done else newest)
+
+
 # Bring the database up to SCHEMA_VERSION (user_version pragma).
 def migrate(conn: sqlite3.Connection) -> None:
     """Bring the database up to SCHEMA_VERSION (user_version pragma)."""
@@ -212,6 +236,9 @@ def migrate(conn: sqlite3.Connection) -> None:
                 if not migrated:
                     conn.execute("UPDATE questions SET status='open' WHERE status='answered' AND owner_check_result IS NULL AND (item='owner-check' OR (item LIKE 'owner-check-%' AND item!='owner-check-answered'))")
                 conn.execute('PRAGMA user_version = 16')
+        if version < 18:
+            with transaction(conn):
+                retire_finished_notes(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_archived ON agents (project, archived)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_kind ON providers_usage (kind, ts)")
         conn.execute("DELETE FROM kv WHERE key IN ('hives-migration','hives-migrated')")
@@ -387,10 +414,12 @@ def answer_question(conn, qid: int, text: str, by: str, apiary: bool = False) ->
             conn.execute("UPDATE package_progress SET state='working', reason='', updated_at=? WHERE state='waiting' AND reason=? AND project=?", (now(), "question:%d" % qid, row["project"]))
         except sqlite3.OperationalError:
             pass
-        conn.execute(
+        new_id = conn.execute(
             "INSERT INTO decisions (project, ts, source, text, plan_path, item) VALUES (?,?,?,?,?,?)",
             (row["project"], now(), by, f"{row['question']} -> {text}", None if apiary else row["plan_path"], row["item"]),
-        )
+        ).lastrowid
+        if by != "owner" and not apiary:
+            retire_notes(conn, row["project"], row["plan_path"], row["item"], new_id)
         add_event(conn, row["project"], "answer", text, data={"question_id": qid, "by": by})
         from . import bees
         bees.answer_failure_question(conn, row, by)
