@@ -985,6 +985,20 @@ def _observe_checks(conn, env, plan, state):
 
 def _drain_checks(conn, env, plan, state):
     """Observe the existing worker only: never push, deploy, reset or start a fix here."""
+    if not state.get('job'):
+        worker = JOBS.get((env.name, plan))
+        if worker and worker.alive():
+            _blocker(conn, env, plan, 'Diagnostic job record is missing; the recorded worker is still running')
+            return None
+        reason = 'Diagnostic run interrupted: no job record or completion result remains. No success is inferred.'
+        report_key = state.get('check_report')
+        if report_key:
+            reason += ' Retained check report: ' + report_key
+        result = _red(conn, env, plan, state, state['step'], reason)
+        if state.get('fix'):
+            state['fix']['review_required'] = True
+            save(conn, env.name, plan, state)
+        return result
     _observe_checks(conn, env, plan, state)
     result = _harvest(conn, env, plan, state)
     if result is None:
@@ -1392,11 +1406,60 @@ def _recovered_repair(conn, env, plan, fix, folder, head, clean):
                 _git(folder, 'merge-base', '--is-ancestor', lineage[2], before)[0] == 1)
 
 
+def _read_repair_verification(path, head, failure_log):
+    if path.stat().st_size > 65536:
+        raise ValueError('verification record exceeds 64 KiB')
+    evidence = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(evidence, dict) or evidence.get('commit') != head:
+        raise ValueError('verification must name the current repair commit')
+    if evidence.get('failure_log') != failure_log:
+        raise ValueError('verification must reference the original failure log')
+    if not isinstance(evidence.get('command'), str) or not evidence['command'].strip():
+        raise ValueError('a targeted regression command is required')
+    if not isinstance(evidence.get('reason'), str) or not evidence['reason'].strip():
+        raise ValueError('explain how this regression covers the original failure')
+    return evidence
+
+
 def _advance_fix(conn, env, plan, state, free_mb, alive):
     """Verify new or recovered committed repairs and scoped command corrections."""
     fix = state["fix"]
     if fix.get('verification'):
         return _verify_repair(conn, env, plan, state)
+    if not fix.get('agent') and not fix.get('owner_stopped'):
+        if any(a.get('plan_path') == plan and a.get('phase') == 'fix' and agent_process.counts(a, alive)
+               for a in runtime.list_agents(conn, env.name, 'all')):
+            _blocker(conn, env, plan, 'Waiting for the existing repair agent to finish before recovery')
+            return None
+        folder = _worktree(env, plan)
+        head = integration.head_commit(folder) if folder else ''
+        status, output = _git(folder, 'status', '--porcelain') if folder else (1, '')
+        clean = bool(folder and status == 0 and not output.strip() and
+                     _git(folder, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')[0] == 1)
+        if _recovered_repair(conn, env, plan, fix, folder, head, clean):
+            history = repair_history(conn, env.name, plan)
+            for entry in reversed(history):
+                if (entry.get('event') != 'attempt-started' or entry.get('log_file') != fix.get('log_file')
+                        or entry.get('step') != fix.get('step') or not entry.get('agent')):
+                    continue
+                prior = next((a for a in runtime.list_agents(conn, env.name, 'all')
+                              if a.get('name') == entry['agent'] and a.get('phase') == 'fix'
+                              and a.get('plan_path') == plan), None)
+                if prior is None or agent_process.counts(prior, alive):
+                    continue
+                try:
+                    evidence = _read_repair_verification(env.run_dir(entry['agent']) / 'repair-verification.json',
+                                                        head, fix.get('log_file', ''))
+                except (OSError, ValueError):
+                    continue
+                if any(e.get('event') == 'targeted-verification' and e.get('commit') == head
+                       and e.get('failure_log') == evidence['failure_log'] and e.get('exit_code') not in (None, 0)
+                       and str(e.get('command', '')).strip() == evidence['command'].strip() for e in history):
+                    continue
+                # Consume a real completed result, without launching a replacement or resetting attempts.
+                fix.update(agent=entry['agent'], diagnosis=False)
+                save(conn, env.name, plan, state)
+                break
     if fix.get("agent"):
         row = next((a for a in runtime.list_agents(conn, env.name, "all") if a.get("name") == fix["agent"] and a.get("phase") == "fix"), None)
         if row is not None and agent_process.counts(row, alive):
@@ -1431,7 +1494,26 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
         _record_repair(conn, env.name, plan, 'attempt-ended', agent=fix['agent'],
                        before=fix.get('head', ''), after=head, report=report,
                        changed=changed, merge_resolved=merge_resolved, conditions_changed=conditions_changed)
-        if not changed and not conditions_changed and not (env.run_dir(fix['agent']) / 'repair-verification.json').is_file():
+        evidence_path = env.run_dir(fix['agent']) / 'repair-verification.json'
+        evidence_agent = fix['agent']
+        if not evidence_path.exists() and _recovered_repair(conn, env, plan, fix, folder, head, clean):
+            for entry in reversed(repair_history(conn, env.name, plan)):
+                if (entry.get('event') != 'attempt-started' or entry.get('log_file') != fix.get('log_file')
+                        or entry.get('step') != fix.get('step') or not entry.get('agent')):
+                    continue
+                candidate = env.run_dir(entry['agent']) / 'repair-verification.json'
+                prior = next((a for a in runtime.list_agents(conn, env.name, 'all')
+                              if a.get('name') == entry['agent'] and a.get('phase') == 'fix'
+                              and a.get('plan_path') == plan), None)
+                if prior is None or agent_process.counts(prior, alive):
+                    continue
+                try:
+                    _read_repair_verification(candidate, head, fix.get('log_file', ''))
+                except (OSError, ValueError):
+                    continue
+                evidence_path, evidence_agent = candidate, entry['agent']
+                break
+        if not changed and not conditions_changed and not evidence_path.is_file():
             fix['review_required'] = True
             if (env.run_dir(fix['agent']) / 'repair-diagnosis.json').is_file():
                 return _finish_review(conn, env, plan, state)
@@ -1441,18 +1523,9 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
             save(conn, env.name, plan, state)
             return None
         try:
-            evidence_path = env.run_dir(fix['agent']) / 'repair-verification.json'
-            if evidence_path.stat().st_size > 65536:
-                raise ValueError('verification record exceeds 64 KiB')
-            evidence = json.loads(evidence_path.read_text(encoding='utf-8'))
-            if not isinstance(evidence, dict) or evidence.get('commit') != head:
-                raise ValueError('verification must name the current repair commit')
-            if evidence.get('failure_log') != fix.get('log_file', ''):
-                raise ValueError('verification must reference the original failure log')
-            if not isinstance(evidence.get('command'), str) or not evidence['command'].strip():
-                raise ValueError('a targeted regression command is required')
-            if not isinstance(evidence.get('reason'), str) or not evidence['reason'].strip():
-                raise ValueError('explain how this regression covers the original failure')
+            evidence = _read_repair_verification(evidence_path, head, fix.get('log_file', ''))
+            if not clean:
+                raise ValueError('repair worktree must be clean with no merge in progress')
         except (OSError, ValueError) as exc:
             return _repair_diagnosis(conn, env, plan, state, 'Missing or invalid repair verification: ' + str(exc))
         failed_checks = [entry for entry in repair_history(conn, env.name, plan)
@@ -1477,7 +1550,7 @@ def _advance_fix(conn, env, plan, state, free_mb, alive):
                                   'Continue diagnosis using the complete history; do not repeat the unchanged pipeline.')
             save(conn, env.name, plan, state)
             return None
-        fix['verification'] = {**evidence, 'retry_reason':
+        fix['verification'] = {**evidence, 'source_agent': evidence_agent, 'retry_reason':
                                'recovered committed progress from original attempt' if recovered else
                                'merge ancestry changed' if merge_resolved else
                                'committed tree changed' if changed else

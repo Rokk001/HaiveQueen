@@ -7,3 +7,4 @@ ACTIVE DECISIONS:
 {{decisions}}
 REPAIR HISTORY:
 {{history}}
+Keep the proposed repair within the assigned project's scope. A defect in HaiveQueen itself is an external dependency for another project's repair, not a technical instruction to that project's Fix Agent. Report it as external with the concrete HQ maintenance prerequisite; retain the existing project repair and verification evidence.

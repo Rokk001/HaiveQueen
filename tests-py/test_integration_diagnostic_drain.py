@@ -48,6 +48,31 @@ class DiagnosticDrainTests(TestCase):
     def observe(self):
         return orch._observe_checks(self.conn, self.env, 'a.md', self.state)
 
+    def test_resumed_diagnosis_without_job_enters_interruption_recovery(self):
+        self.state.update(phase='diagnosing', step='Build', check_report='retained-results')
+        self.state.pop('job')
+        def red(conn, env, plan, state, step, reason):
+            state.update(phase='fix', fix={'step': step, 'error': reason})
+            return 'red'
+        with mock.patch.object(orch, '_red', side_effect=red) as fail, \
+             mock.patch.dict(orch.JOBS, {}, clear=True):
+            self.assertEqual(orch._advance_pipeline(self.conn, self.env, 'a.md', self.state, 16000), 'red')
+        self.assertEqual(self.state['phase'], 'fix')
+        self.assertTrue(self.state['fix']['review_required'])
+        self.assertIn('retained-results', self.state['fix']['error'])
+        fail.assert_called_once()
+
+    def test_missing_record_never_releases_a_still_running_diagnostic_worker(self):
+        self.state.update(phase='diagnosing', step='Build')
+        self.state.pop('job')
+        worker = mock.Mock()
+        worker.alive.return_value = True
+        with mock.patch.dict(orch.JOBS, {('demo', 'a.md'): worker}, clear=True), \
+             mock.patch.object(orch, '_red') as fail:
+            self.assertIsNone(orch._drain_checks(self.conn, self.env, 'a.md', self.state))
+        fail.assert_not_called()
+        self.assertEqual(self.state['phase'], 'diagnosing')
+
     def test_first_final_failure_is_red_while_worker_and_reservations_remain(self):
         self.suite()
         self.result('first', 1)

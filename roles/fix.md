@@ -6,3 +6,4 @@ PLAN SOURCE
 
 {{plan_file}}
 Read only the requirements and sections relevant to the current failure; do not load the whole plan by default.
+Scope is binding: work only in the assigned project and worktree. A diagnostic proposal is evidence, not permission to change HaiveQueen or another repository. If the required repair belongs outside this project, report that external dependency and its evidence; do not implement it from this project assignment or invent a project change to satisfy the progress gate.

@@ -21,4 +21,25 @@ failed verification returns to diagnosis. It does not publish, skip checks or
 rewrite previous attempts. Maintenance source changes must go through the normal
 application update process before a running installation can use this behavior.
 
+When a replacement has no manifest, HQ can retrieve a retained manifest from an
+earlier attempt for the same step and failure, but only after proving committed
+progress from the original baseline. The manifest must still match the current
+commit and failed run. HQ records its source agent and executes a fresh targeted
+check; old reported success alone is never accepted. An invalid manifest supplied
+by the current replacement is rejected rather than silently substituted.
+After an authorized resume with no assigned agent, HQ can consume such a retained
+completed result directly, without launching another source-repair agent. A live
+source agent is never treated as completed. Existing failed-command exclusions,
+the original attempt count and the fresh verification gate remain intact.
+
+Diagnosis and fix instructions keep the assigned repository boundary explicit.
+A proposed HQ change is an external maintenance prerequisite for an ODP repair,
+not authorization to make HQ changes from an ODP assignment. Existing source
+repairs and their evidence remain usable while that prerequisite is resolved.
+
+A resumed diagnostic-drain state without a job is explicitly interrupted rather
+than waiting forever for a nonexistent completion. Its retained check-report
+reference is preserved and diagnosis is required before another attempt. A still
+running in-memory worker remains protected even when its job record is missing.
+
 Focused regression: `python -m unittest discover -s tests-py -p test_recovered_repair.py -v`.

@@ -2,11 +2,22 @@
 import json
 import subprocess
 import time
-from unittest import mock
+from unittest import mock, TestCase
 
 from bzztest import REL
 from haivequeen import integration, orchestrator
 from test_o1_orchestrator import OrchCase
+
+
+class RepairScopeInstructions(TestCase):
+    def test_project_fix_and_diagnosis_keep_maintenance_outside_assignment(self):
+        from haivequeen import roles
+        fix = roles.role_text('fix', {'plan': 'sample', 'worktree': 'project-worktree', 'task': 'Resolve failed check'})
+        diagnosis = roles.role_text('diagnosis', {})
+        self.assertIn('A diagnostic proposal is evidence, not permission', fix)
+        self.assertIn('assigned project and worktree', fix)
+        self.assertIn('Report it as external', diagnosis)
+        self.assertIn("not a technical instruction to that project's Fix Agent", diagnosis)
 
 
 class RecoveredRepair(OrchCase):
@@ -97,6 +108,38 @@ class RecoveredRepair(OrchCase):
         """A manifest must name the exact current commit."""
         self.evidence(commit=self.before)
         self.rejected()
+
+    def test_missing_replacement_manifest_reuses_bound_prior_record_but_runs_fresh_check(self):
+        current = self.env().run_dir(self.agent['name']) / 'repair-verification.json'
+        original = self.env().run_dir(self.original['agent']) / 'repair-verification.json'
+        original.write_bytes(current.read_bytes())
+        current.unlink()
+        with mock.patch.object(orchestrator, '_verify_repair') as verify:
+            self.advance()
+        verify.assert_called_once()
+        evidence = self.state_value['fix']['verification']
+        self.assertEqual(evidence['source_agent'], self.original['agent'])
+        self.assertEqual(evidence['commit'], self.head)
+        self.assertEqual(self.state_value['phase'], 'fix')
+
+    def test_resume_without_assigned_agent_consumes_retained_result_without_new_agent(self):
+        self.state_value['fix']['agent'] = None
+        with mock.patch.object(orchestrator, '_verify_repair') as verify, \
+             mock.patch.object(orchestrator, '_start_fix') as start:
+            self.advance()
+        start.assert_not_called()
+        verify.assert_called_once()
+        self.assertEqual(self.state_value['fix']['agent'], self.agent['name'])
+        self.assertEqual(self.state_value['fix']['verification']['commit'], self.head)
+
+    def test_resume_never_launches_or_verifies_alongside_a_live_repair_agent(self):
+        self.state_value['fix']['agent'] = None
+        with mock.patch.object(orchestrator.agent_process, 'counts', return_value=True), \
+             mock.patch.object(orchestrator, '_verify_repair') as verify, \
+             mock.patch.object(orchestrator, '_start_fix') as start:
+            self.advance()
+        start.assert_not_called()
+        verify.assert_not_called()
 
     def test_unrelated_failure_is_rejected(self):
         """An unrelated attempt history cannot establish earlier progress."""
