@@ -89,7 +89,7 @@ class QueenStartSlimTest(unittest.TestCase):
         status = {d["id"]: d["status"] for d in runtime.list_decisions(self.conn, "p")}
         self.assertEqual((status[note], status[owner]), ("superseded", "active"))
 
-    def test_upgrade_keeps_the_newest_note_per_item_and_none_for_done_packages(self):
+    def test_existing_database_keeps_the_newest_note_per_item_and_none_for_done_packages_once(self):
         path = self.root / "old.db"
         conn = db.connect(path)
         bees.ensure_attempts(conn)
@@ -98,12 +98,13 @@ class QueenStartSlimTest(unittest.TestCase):
                for source, text, item in [("coordinator", "a", "P1"), ("coordinator", "b", "P1"), ("owner", "c", "P1"),
                                           ("auto", "d", "P2")]]
         conn.execute("INSERT INTO package_progress (project, plan_path, package, state, agent, updated_at) VALUES ('p', ?, 'P2', 'done', 'x', ?)", (PLAN, db.now()))
-        conn.execute("PRAGMA user_version = 17")
+        conn.execute("DELETE FROM kv WHERE key='decision-notes-retired'")   # a database from before this rule
         conn.commit()
         conn.close()
         conn = db.connect(path)
         try:
             status = dict(conn.execute("SELECT id, status FROM decisions").fetchall())
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 17)   # older versions keep opening it
         finally:
             conn.close()
         self.assertEqual([status[i] for i in ids], ["superseded", "active", "active", "superseded"])

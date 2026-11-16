@@ -11,7 +11,7 @@ from . import platform as osplat
 from . import filetxn
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 17
 BUSY_TIMEOUT_MS = 10000
 
 
@@ -236,13 +236,16 @@ def migrate(conn: sqlite3.Connection) -> None:
                 if not migrated:
                     conn.execute("UPDATE questions SET status='open' WHERE status='answered' AND owner_check_result IS NULL AND (item='owner-check' OR (item LIKE 'owner-check-%' AND item!='owner-check-answered'))")
                 conn.execute('PRAGMA user_version = 16')
-        if version < 18:
-            with transaction(conn):
-                retire_finished_notes(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_archived ON agents (project, archived)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_kind ON providers_usage (kind, ts)")
         conn.execute("DELETE FROM kv WHERE key IN ('hives-migration','hives-migrated')")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    # A data step, not a schema change: older versions keep opening the shared database.
+    if not conn.execute("SELECT 1 FROM kv WHERE project='' AND key='decision-notes-retired'").fetchone():
+        with transaction(conn):
+            if not conn.execute("SELECT 1 FROM kv WHERE project='' AND key='decision-notes-retired'").fetchone():
+                retire_finished_notes(conn)
+                conn.execute("INSERT INTO kv (project, key, value, updated_at) VALUES ('', 'decision-notes-retired', '1', ?)", (now(),))
 
 
 @contextmanager
