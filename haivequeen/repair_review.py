@@ -46,12 +46,16 @@ def failure_report_prompt(path, commit, failure_log, known, project="", plan="")
              json.dumps([d['id'] for d in known]) + '\nPreviews: ' + preview + sources))
 
 
-def read(path, commit, failure_log, known):
+def read(path, commit, failure_log, known, *, bound_failure=False):
     if path.stat().st_size > 65536:
         raise ValueError('diagnosis exceeds 64 KiB')
     data = json.loads(path.read_text(encoding='utf-8'))
     if not isinstance(data, dict):
         raise ValueError('diagnosis must be an object')
+    # Only a scheduler-bound package run can obtain this opaque identity from HQ.
+    # Commit and reviewed decisions remain explicit claims validated below.
+    if bound_failure:
+        data['failure_log'] = failure_log
     if data.get('commit') != commit or data.get('failure_log') != failure_log:
         raise ValueError('diagnosis does not refer to the current commit and failed run')
     if data.get('reviewed_decisions') != [d['id'] for d in known]:

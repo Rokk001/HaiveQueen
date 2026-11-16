@@ -310,6 +310,100 @@ class PackageDiagnosis(RoundCase):
                 self.report(current, next_action='Same repair paraphrased after upgrade'),
                 current, 'medium', ['medium'])
 
+class DiagnosisReportBinding(PackageDiagnosis):
+    def bind(self, current, path):
+        state = self.review._load(self.conn, 'testproj', REL, 'P1')
+        state.update(phase='running', scope=current, agent='review', report_path=str(path.resolve()))
+        runtime.kv_set(self.conn, 'testproj', self.review._key(REL, 'P1'), json.dumps(state))
+
+    def test_bound_run_supplies_opaque_failure_identity_without_rewriting_report(self):
+        current = self.scope()
+        path = self.report(current, failure_log=current['failure_log'][:-3])
+        original = path.read_bytes()
+        self.bind(current, path)
+        accepted = self.review.accept(self.conn, 'testproj', REL, 'P1', path, current, 'medium', ['medium'])
+        self.assertEqual(accepted['failure_log'], current['failure_log'])
+        self.assertEqual(path.read_bytes(), original)
+        self.assertTrue(self.review.consume(self.conn, 'testproj', REL, 'P1', current))
+        self.assertFalse(self.review.consume(self.conn, 'testproj', REL, 'P1', current))
+        self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'medium'), 1)
+
+    def test_binding_does_not_accept_foreign_path_commit_decisions_or_changed_attempts(self):
+        current = self.scope()
+        path = self.report(current, failure_log='mistyped')
+        self.bind(current, path)
+        other = self.base / 'foreign.json'
+        other.write_bytes(path.read_bytes())
+        with self.assertRaises(ValueError):
+            self.review.accept(self.conn, 'testproj', REL, 'P1', other, current, 'medium', ['medium'])
+        for changes in ({'commit': 'other-head'}, {'reviewed_decisions': [99]}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.review.accept(self.conn, 'testproj', REL, 'P1',
+                    self.report(current, failure_log='mistyped', **changes), current, 'medium', ['medium'])
+        self.record('another-failure')
+        with self.assertRaisesRegex(ValueError, 'current attempts'):
+            self.review.accept(self.conn, 'testproj', REL, 'P1', self.report(current), current, 'medium', ['medium'])
+        self.assertIsNone(self.review.authorization(self.conn, 'testproj', REL, 'P1', self.scope()))
+
+    def test_absolute_local_log_is_accepted_but_outside_and_reused_evidence_are_not(self):
+        current = self.repeat_scope()
+        experiment = self.experiment()
+        experiment['log'] = str((self.base / experiment['log']).resolve())
+        outside = self.base.parent / (self.base.name + '-outside.log')
+        outside.write_text('outside evidence')
+        try:
+            with self.assertRaises(ValueError):
+                self.review.accept(self.conn, 'testproj', REL, 'P1',
+                    self.report(current, experiment={**experiment, 'log': str(outside)}), current, 'medium', ['medium'])
+        finally:
+            outside.unlink()
+        self.review.accept(self.conn, 'testproj', REL, 'P1',
+            self.report(current, experiment=experiment), current, 'medium', ['medium'])
+        self.review.consume(self.conn, 'testproj', REL, 'P1', current)
+        self.record('same-code-failed')
+        current = self.scope()
+        with self.assertRaisesRegex(ValueError, 'already authorized'):
+            self.review.accept(self.conn, 'testproj', REL, 'P1',
+                self.report(current, experiment=experiment), current, 'medium', ['medium'])
+
+    def test_scheduler_accepts_typo_and_local_absolute_log_without_owner_escalation(self):
+        self.plan('IN_PROGRESS', [{'id': 'P1', 'class': 'medium'}])
+        env = self.env()
+        self.review.request(env, REL, 'P1', 'medium')
+        state = self.review._load(self.conn, env.name, REL, 'P1')
+        state.update(agent='prior-review', feedback='experiment requires its actual integer exit code')
+        runtime.kv_set(self.conn, env.name, self.review._key(REL, 'P1'), json.dumps(state))
+        def launch(ctx, action, **kwargs):
+            self.assertIn(str(env.run_dir('prior-review') / 'package-diagnosis.json'), action['prompt'])
+            self.assertIn('do not repeat a probe solely', action['prompt'])
+            self.assertNotIn('package-attempts:', action['prompt'])
+            ctx['state']['names'].append('bound-review')
+            runtime.upsert_agent(self.conn, env.name, 'bound-review',
+                                 dict(plan=REL, phase='fix', status='done', exitCode=0))
+            return True
+        with mock.patch('haivequeen.package_diagnosis.current_commit', return_value='head-1'), \
+             mock.patch('haivequeen.bees.plan_worktree', return_value=('branch', self.wt)), \
+             mock.patch('haivequeen.loop._min_ram', return_value=0), \
+             mock.patch('haivequeen.loop._do_start', side_effect=launch):
+            self.review.advance(env, 16384, alive=lambda pid: False)
+            state = self.review._load(self.conn, env.name, REL, 'P1')
+            output = env.run_dir('bound-review') / 'package-diagnosis.json'
+            output.parent.mkdir(parents=True, exist_ok=True)
+            log = output.parent / 'probe.log'
+            log.write_text('isolated probe failed: actual exit 1')
+            report = json.loads(self.report(state['scope'], failure_log='truncated-id', experiment=dict(
+                question='Which boundary fails?', command='focused probe', exit=1,
+                finding='The isolated boundary fails', log=str(log.resolve()))).read_text())
+            output.write_text(json.dumps(report))
+            # Reload from persisted scheduler state, including after a restart.
+            self.review.advance(env, 16384, alive=lambda pid: False)
+        state = self.review._load(self.conn, env.name, REL, 'P1')
+        self.assertEqual(state['phase'], 'authorized')
+        self.assertEqual(state['authorization']['protocol'], 2)
+        self.assertEqual(runtime.list_questions(self.conn, env.name, status='open'), [])
+        self.assertEqual(bees.failure_count(self.conn, env.name, REL, 'P1', 'medium'), 1)
+
+
 class PackageDiagnosisLifecycle(PackageDiagnosis):
     def test_scheduler_keeps_accepted_baseline_across_new_review_and_restart(self):
         self.plan('IN_PROGRESS', [{'id': 'P1', 'class': 'medium'}])

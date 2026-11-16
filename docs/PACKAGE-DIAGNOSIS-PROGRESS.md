@@ -124,3 +124,18 @@ Focused flow tests cover blocked prerequisites, independent repair dispatch, com
 cleanup-criterion handoff, receipt validation, restart persistence, independent work,
 next-step dispatch followed by another genuine failure, and stale grants and receipts.
 They operate on isolated fixtures, not live plans or processes.
+
+
+Package diagnosis reports are bound by HQ to their scheduled output path and evidence
+scope. The opaque failure-history identity is supplied by HQ, not transcribed by the
+model. Only a running, persisted binding with the same current scope permits this;
+legacy or foreign reports still require an exact identity. The reported commit and
+reviewed decisions remain mandatory and validated. Changed attempts or decisions
+invalidate the binding. The original report is retained unchanged for inspection.
+
+Experiment logs may use relative or absolute paths resolving inside the diagnosis
+run directory. Outside paths (including resolved links), missing or empty logs and
+non-integer exit codes remain invalid. Evidence reuse guards and one-use repair
+permissions are unchanged. A protocol correction receives the prior report path
+and reuses valid observations instead of repeating a probe just to repair JSON.
+This does not grant a repair retry or complete any package by itself.

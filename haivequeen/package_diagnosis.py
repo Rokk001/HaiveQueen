@@ -66,7 +66,7 @@ def experiment_evidence(report, path, state, expected):
     relative = Path(experiment['log'])
     root = Path(path).resolve().parent
     log = (root / relative).resolve()
-    if relative.is_absolute() or not log.is_relative_to(root) or not log.is_file():
+    if not log.is_relative_to(root) or not log.is_file():
         raise ValueError('experiment log must exist inside this diagnosis run directory')
     if log.stat().st_size == 0 or log.stat().st_size > 4 * 1024 * 1024:
         raise ValueError('experiment log must be nonempty and at most 4 MiB')
@@ -116,7 +116,11 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
     if scope(conn, project, plan, package, expected['commit']) != expected:
         raise ValueError('diagnosis does not match current attempts and decisions')
     known = repair_review.decisions(conn, project, plan)
-    report = repair_review.read(path, expected['commit'], expected['failure_log'], known)
+    binding = _load(conn, project, plan, package)
+    bound = (binding.get('phase') == 'running' and binding.get('scope') == expected
+             and binding.get('report_path') == str(Path(path).resolve()))
+    report = repair_review.read(path, expected['commit'], expected['failure_log'], known,
+                                bound_failure=bound)
     selected = report.get('repair_class', current_class)
     if report['kind'] == 'technical':
         if selected not in offered:
@@ -247,7 +251,8 @@ def prompt(conn, project, plan, package, commit, output_path, current_class, off
                     'a previous report. If blocked by an actual external prerequisite, identify that '
                     'prerequisite; exhausted attempts alone remain a technical problem.\n')
     return roles.role_text('diagnosis', {
-        'output_path': output_path, 'commit': commit, 'failure_log': current['failure_log'],
+        'output_path': output_path, 'commit': commit,
+        'failure_log': 'HQ supplies this identity from the scheduled run; omit failure_log',
         'decision_ids': json.dumps([d['id'] for d in known]),
         'decisions': json.dumps([{'id': d['id'], 'text': str(d.get('text', ''))[:200]} for d in known[-8:]]),
         'history': json.dumps(history) + sources,
@@ -466,6 +471,9 @@ def advance(env, free_mb, alive=None):
         current = scope(conn, env.name, plan, package, head)
         text = prompt(conn, env.name, plan, package, head, env.run_dir(name) / 'package-diagnosis.json',
                       state['current_class'], offered)
+        if state.get('feedback') and state.get('agent'):
+            previous_path = env.run_dir(state['agent']) / 'package-diagnosis.json'
+            text += '\nRejected report for protocol correction: ' + str(previous_path) + '\n'
         text += '\nPlan: %s\nPackage: %s\nOwner topics: %s\nReview feedback: %s\n' % (
             plan, package, json.dumps(env.settings.get('ownerTopics', [])), state.get('feedback', ''))
         start = {'names': names, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'RUNNING'},
@@ -474,5 +482,6 @@ def advance(env, free_mb, alive=None):
         action = {'name': name, 'type': pick['name'], 'phase': 'fix', 'plan': plan, 'package': '',
                   'cwd': str(folder), 'class': cls, 'prompt': text}
         if loop._do_start(ctx, action, forced_pick=pick):
-            state.update(phase='running', agent=start['names'][-1], scope=current)
+            state.update(phase='running', agent=start['names'][-1], scope=current,
+                         report_path=str((env.run_dir(start['names'][-1]) / 'package-diagnosis.json').resolve()))
             runtime.kv_set(conn, env.name, entry['key'], json.dumps(state))
