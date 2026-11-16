@@ -270,3 +270,24 @@ is started. Attempt history and retry guards remain unchanged.
 A focused scheduler regression covers rejection, a corrected behavior and criteria
 with unchanged workflow, fresh review, withheld authorization while pending, and
 dispatch of the corrected repair only after a passing verdict.
+
+## Executable workflow prerequisites
+
+Before starting or reusing the independent workflow review, HQ checks explicit
+local script references in the workflow command in the package checkout. Missing
+Python, PowerShell, shell and JavaScript/TypeScript scripts are a setup rejection,
+not a failing product baseline and not permission to dispatch an implementation
+Agent. Quoted paths with spaces are supported. Inputs must stay inside the assigned
+worktree; commands that change directory must use an existing runner instead.
+The input content fingerprints belong to the cached review: missing or changed
+scripts cannot inherit a prior successful verdict. HQ checks file availability
+again in the actual assigned checkout before reserving an Agent or consuming the
+repair grant; newly approved grants retain the reviewed input hashes and reject
+changed content at dispatch. A failed preflight keeps history and authorization intact.
+
+This preflight does not execute arbitrary proposed commands and does not prove
+runtime dependencies or product correctness. The independent checker must also
+verify executability (including module commands and dependencies); the repair
+still requires actual failing-before and passing-after evidence. A missing runner
+must be resolved as a prerequisite or replaced with an existing suitable workflow,
+never described as a product regression that has already run.

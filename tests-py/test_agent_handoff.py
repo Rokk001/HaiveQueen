@@ -16,6 +16,8 @@ class Handoff(RoundCase):
     def setUp(self):
         super().setUp()
         self.mock_agent_worktrees()
+        (self.base / 'assigned-agent-worktree' / 'workflow.py').write_text('# isolated workflow fixture\n')
+        (self.repo / 'workflow.py').write_text('# isolated workflow fixture\n')
         self.plan('IN_PROGRESS', [{'id': 'P1', 'class': 'medium'}, {'id': 'P2', 'class': 'medium'}])
         hives.create(self.conn, 'testproj', REL, 'claude', '123456')
         self.agent('queen', phase='queen', status='running', provider='claude', pid=42)

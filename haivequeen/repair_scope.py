@@ -73,8 +73,9 @@ def review(env, plan, package, report, cwd, free_mb, alive):
     from . import agent_process, bees, db, loop, readygate
     ref = reference(env.conn, env.name, plan, package)
     validate(report['contract'], ref)
+    inputs = repair_contract.workflow_inputs(cwd, report['contract']['workflow'])
     proposal = dict(contract=report['contract'], next_action=report.get('next_action', ''))
-    fingerprint = repair_contract.identity(['repair-proposal-v2', ref['id'], proposal])
+    fingerprint = repair_contract.identity(['repair-proposal-v3', ref['id'], proposal, inputs])
     key = 'repair-workflow-review:' + json.dumps([plan, package], separators=(',', ':'))
     record = json.loads(runtime.kv_get(env.conn, env.name, key) or '{}')
     if record.get('agent'):
@@ -94,6 +95,8 @@ def review(env, plan, package, report, cwd, free_mb, alive):
               'referenced requirements, applicable decisions and relevant entrypoint. Do its checkpoints '
               'cover the whole required product execution, including success and required failure/recovery? '
               'Also assess whether the selected repair advances this workflow using its criteria and prerequisites. '
+              'Verify that the workflow command is executable in this checkout, including module targets and dependencies; '
+              'do not approve invented runners or mistake missing-command errors for a red product baseline. '
               'Reject a helper or prerequisite presented as the whole workflow, even when coverage lists '
               'every requirement. Respect superseding decisions and already accepted work. Do not repair '
               'code or run product processes. End with READY-CHECK: PASSED or READY-CHECK: FAILED, followed '

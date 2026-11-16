@@ -1,6 +1,7 @@
 """Executable repair contracts and evidence for progress short of package completion."""
 import hashlib
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -11,6 +12,41 @@ def identity(value):
 
 def text(value):
     return isinstance(value, str) and bool(value.strip())
+
+
+def workflow_inputs(cwd, workflow):
+    """Check explicit local command inputs without executing an untrusted command.
+
+    Fingerprint their bytes so a cached semantic verdict cannot authorize a
+    changed runner. This is a prerequisite check, never a passing test result.
+    """
+    command = workflow.get('command', '')
+    try:
+        tokens = shlex.split(command, posix=False)
+    except ValueError as exc:
+        raise ValueError('Workflow command is malformed: ' + str(exc)) from exc
+    if not cwd or not Path(cwd).is_dir():
+        raise ValueError('Workflow prerequisite missing: assigned checkout is unavailable')
+    root = Path(cwd).resolve()
+    inputs = {}
+    script_suffixes = {'.py', '.ps1', '.sh', '.cmd', '.bat', '.js', '.mjs', '.cjs', '.ts'}
+    for token in tokens:
+        value = token.strip('"\'')
+        if value in ('cd', 'pushd'):
+            raise ValueError('Workflow command must run from the assigned worktree; use an existing runner instead of changing directory')
+        if value.startswith('-') and '=' in value:
+            value = value.split('=', 1)[1].strip('"\'')
+        path = Path(value.replace('\\', '/'))
+        if path.suffix.lower() not in script_suffixes:
+            continue
+        resolved = (root / path).resolve()
+        if not resolved.is_relative_to(root):
+            raise ValueError('Workflow input must be inside the assigned worktree: ' + value)
+        if not resolved.is_file():
+            raise ValueError('Workflow prerequisite missing: ' + value +
+                             '. Select an existing executable workflow before authorizing implementation; a missing runner is not a failing product baseline.')
+        inputs[resolved.relative_to(root).as_posix()] = hashlib.sha256(resolved.read_bytes()).hexdigest()
+    return inputs
 
 
 def normalize_workflow(workflow):

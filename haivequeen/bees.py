@@ -1274,6 +1274,14 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
     if not pair:
         return refuse(env, package, 'the package worktree could not be prepared; see the round log')
     cwd, branch = pair
+    if review_grant:
+        from . import repair_contract
+        try:
+            inputs = repair_contract.workflow_inputs(cwd, review_grant['contract']['workflow'])
+            if 'workflow_inputs' in review_grant and inputs != review_grant['workflow_inputs']:
+                raise ValueError('Workflow inputs changed after authorization; a fresh workflow review is required')
+        except (OSError, ValueError) as exc:
+            return refuse(env, package, str(exc))
     if not valid_bee_worktree(env, cwd, queen.get('cwd')):
         return refuse(env, package, 'the package worktree is not a separate checkout of this repository')
     # The runner otherwise adds a suffix after the guard was stored. Choose

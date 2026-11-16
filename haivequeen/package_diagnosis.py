@@ -117,7 +117,7 @@ def continuation(conn, project, plan, package, state, report, selected):
     return follow, action
 
 
-def accept(conn, project, plan, package, path, expected, current_class, offered):
+def accept(conn, project, plan, package, path, expected, current_class, offered, workflow_inputs=None):
     """Validate a diagnosis; a technical report grants one scoped retry only."""
     if scope(conn, project, plan, package, expected['commit']) != expected:
         raise ValueError('diagnosis does not match current attempts and decisions')
@@ -191,6 +191,8 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
                     progress=state.pop('workflow_progress', None)))
             state['workflow_contract'] = contract['workflow']
             state['authorization'].update(contract=contract, protocol=5)
+            if workflow_inputs is not None:
+                state['authorization']['workflow_inputs'] = workflow_inputs
         if report['kind'] == 'technical':
             state['accepted_scope'] = dict(expected)
         runtime.kv_set(conn, project, _key(plan, package), json.dumps(state))
@@ -468,7 +470,9 @@ def advance(env, free_mb, alive=None):
                         raise ValueError('Workflow scope review: ' + reason)
                 report = accept(conn, env.name, plan, package,
                                 env.run_dir(state['agent']) / 'package-diagnosis.json',
-                                state['scope'], state['current_class'], offered)
+                                state['scope'], state['current_class'], offered,
+                                workflow_inputs=repair_contract.workflow_inputs(checkout(env, plan, package), candidate['contract']['workflow'])
+                                if candidate['kind'] == 'technical' else None)
                 state = _load(conn, env.name, plan, package)
                 state.pop('review_rejection', None)
                 state['phase'] = 'authorized' if report['kind'] == 'technical' else 'owner'
