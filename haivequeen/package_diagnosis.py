@@ -284,7 +284,7 @@ def prompt(conn, project, plan, package, commit, output_path, current_class, off
                     'processes. Add experiment: {question, command, exit: integer, finding, log: relative filename} '
                     'with actual output in this run directory. Explain how it changes the next repair. '
                     'Only actual external prerequisites justify questions; exhausted retries do not.\n')
-    return roles.role_text('diagnosis', {
+    return repair_review.size_instructions() + roles.role_text('diagnosis', {
         'output_path': output_path, 'commit': commit,
         'failure_log': 'HQ supplies this identity from the scheduled run; omit failure_log',
         'decision_ids': json.dumps([d['id'] for d in known]),
@@ -521,7 +521,9 @@ def advance(env, free_mb, alive=None):
                       state['current_class'], offered)
         if state.get('feedback') and state.get('agent'):
             previous_path = env.run_dir(state['agent']) / 'package-diagnosis.json'
-            text += '\nRejected report for protocol correction: ' + str(previous_path) + '\n'
+            text += ('\nRejected report for protocol correction: ' + str(previous_path) + '\n'
+                     'Reuse its valid observations; do not repeat a probe solely to correct the report format. '
+                     'Preserve the original and write the corrected report to your own output path.\n')
         text += '\nPlan: %s\nPackage: %s\nOwner topics: %s\nReview feedback: %s\n' % (
             plan, package, json.dumps(env.settings.get('ownerTopics', [])), state.get('feedback', ''))
         start = {'names': names, 'busy': [], 'plan_status': {scheduler.norm_plan(plan): 'RUNNING'},

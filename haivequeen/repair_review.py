@@ -29,7 +29,7 @@ def context(known, history, project, plan):
 
 def prompt(path, commit, failure_log, known, history, project='', plan=''):
     decision_preview, history_preview = context(known, history, project, plan)
-    return roles.role_text("diagnosis", {"output_path": path, "commit": commit,
+    return size_instructions() + roles.role_text("diagnosis", {"output_path": path, "commit": commit,
         "failure_log": failure_log, "decisions": decision_preview,
         "history": history_preview, "decision_ids": json.dumps([d['id'] for d in known])})
 
@@ -41,7 +41,7 @@ def observations(review):
 
 def failure_report_prompt(path, commit, failure_log, known, project="", plan=""):
     preview, sources = context(known, [], project, plan)
-    return ('\nIf unable to repair, avoid another agent repeating your investigation: write %s '
+    return size_instructions() + ('\nIf unable to repair, avoid another agent repeating your investigation: write %s '
             'as compact JSON with kind (technical/product/permission/external), commit=%s, '
             'failure_log=%s, reviewed_decisions (all IDs below), evidence (specific observations), '
             'analysis. For technical include next_action and why_new; an optional repair_class '
@@ -51,10 +51,45 @@ def failure_report_prompt(path, commit, failure_log, known, project="", plan="")
              json.dumps([d['id'] for d in known]) + '\nPreviews: ' + preview + sources))
 
 
+# Separate structured instructions from supporting observations. Read bounded bytes
+# even if a file grows after stat; formatting is not semantic context.
+REPORT_BYTES = 256 * 1024
+CORE_BYTES = 64 * 1024
+EVIDENCE_BYTES = 128 * 1024
+
+
+def size_instructions():
+    return ('Diagnosis budgets: UTF-8 file at most %s bytes; compact JSON excluding '
+            'top-level evidence at most %s bytes; evidence at most %s bytes. '
+            'Keep observations concise with file/log references; do not copy histories. '
+            'Preserve all required contract fields, decisions and workflow coverage. '
+            'Measure UTF-8 bytes before submitting; never truncate JSON or drop requirements. '
+            % (REPORT_BYTES, CORE_BYTES, EVIDENCE_BYTES))
+
+
+def read_document(path):
+    with path.open('rb') as stream:
+        raw = stream.read(REPORT_BYTES + 1)
+    if len(raw) > REPORT_BYTES:
+        raise ValueError('diagnosis file exceeds %s bytes. ' % REPORT_BYTES + size_instructions())
+    data = json.loads(raw.decode('utf-8'))
+    if not isinstance(data, dict):
+        raise ValueError('diagnosis must be an object')
+    def size(value):
+        return len(json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+    core = {k: v for k, v in data.items() if k != 'evidence'}
+    for label, value, budget in (('structured report', core, CORE_BYTES),
+                                  ('evidence', data.get('evidence'), EVIDENCE_BYTES)):
+        actual = size(value)
+        if actual > budget:
+            largest = sorted(((k, size(v)) for k, v in core.items()), key=lambda x: x[1], reverse=True)[:3]
+            raise ValueError('diagnosis %s uses %s bytes; limit %s. Largest structured fields: %s. '
+                             % (label, actual, budget, largest) + size_instructions())
+    return data
+
+
 def read(path, commit, failure_log, known, *, bound_failure=False):
-    if path.stat().st_size > 65536:
-        raise ValueError('diagnosis exceeds 64 KiB')
-    data = json.loads(path.read_text(encoding='utf-8'))
+    data = read_document(path)
     if not isinstance(data, dict):
         raise ValueError('diagnosis must be an object')
     # Only a scheduler-bound package run can obtain this opaque identity from HQ.
@@ -97,7 +132,7 @@ def reject(state, scope, reason, agent):
 
 def correction_prompt(previous_run, reason):
     """Keep original observations available when only the receipt needs correction."""
-    return ('\nPROTOCOL CORRECTION, SAME EVIDENCE\n'
+    return size_instructions() + ('\nPROTOCOL CORRECTION, SAME EVIDENCE\n'
             'Read the prior diagnosis at %s and its execution logs in %s. '
             'Reuse its valid observations and correct this validation error: %s. '
             'Do not repeat the investigation solely to repair the report format. '

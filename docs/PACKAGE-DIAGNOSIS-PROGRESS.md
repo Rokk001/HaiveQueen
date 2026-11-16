@@ -291,3 +291,20 @@ verify executability (including module commands and dependencies); the repair
 still requires actual failing-before and passing-after evidence. A missing runner
 must be resolved as a prerequisite or replaced with an existing suitable workflow,
 never described as a product regression that has already run.
+
+
+## Bounded diagnosis reports
+
+Diagnosis transport is bounded to 256 KiB of UTF-8, read with a hard byte limit.
+The compact JSON object excluding top-level `evidence` remains limited to 64 KiB;
+the evidence list has a separate 128 KiB budget. Formatting whitespace does not
+consume the semantic budgets. This accommodates complete repair/workflow contracts
+alongside observations without deleting requirements or accepting malformed reports.
+All identity, decision, evidence, contract and workflow checks still run normally.
+
+Initial diagnosis and correction instructions state these budgets and require
+concise observations with source references instead of copied histories. Size
+rejections report the measured category and largest structured fields so correction
+can target duplication without repeating investigation. Oversized, malformed or
+invalid reports never grant a repair retry. Existing owner questions are not
+silently answered or cleared by installing this change.
