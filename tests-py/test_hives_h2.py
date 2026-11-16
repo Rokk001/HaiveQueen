@@ -240,6 +240,8 @@ class QueenIntegrationTests(RoundCase):
                                'criteria': [{'id': 'caller-argument',
                                              'expectation': 'The caller passes the expected argument.',
                                              'check': 'python -m unittest test_caller_argument'}]}}
+        reference = review.repair_scope.reference(self.conn, 'testproj', REL, 'P1')
+        report['contract']['workflow'].update(scope=reference['id'], coverage={key: ['caller'] for key in reference['requirements']})
         path = self.base / 'diagnosis.json'
         path.write_text(json.dumps(report), encoding='utf-8')
         review.accept(self.conn, 'testproj', REL, 'P1', path, scope, current, ['light', 'medium', 'heavy'])

@@ -13,12 +13,50 @@ def text(value):
     return isinstance(value, str) and bool(value.strip())
 
 
+def normalize_workflow(workflow):
+    """Accept both documented IDs and descriptive checkpoint objects losslessly."""
+    if not isinstance(workflow, dict):
+        return workflow
+    checkpoints = workflow.get('checkpoints')
+    if not isinstance(checkpoints, list):
+        return workflow
+    descriptions = workflow.get('expectations', {})
+    if not isinstance(descriptions, dict) or any(not text(k) or not text(v) for k, v in descriptions.items()):
+        raise ValueError('checkpoint expectations must map IDs to text')
+    ids, descriptions = [], dict(descriptions)
+    for item in checkpoints:
+        if isinstance(item, dict):
+            if not text(item.get('id')) or not text(item.get('expectation')):
+                raise ValueError('checkpoint objects require id and expectation strings')
+            key = item['id']
+            if key in descriptions and descriptions[key] != item['expectation']:
+                raise ValueError('checkpoint expectations conflict')
+            descriptions[key] = item['expectation']
+        else:
+            key = item
+        if not text(key) or key in ids:
+            raise ValueError('workflow requires fixed unique completion checkpoints')
+        ids.append(key)
+    workflow['checkpoints'] = ids
+    if any(key not in ids for key in descriptions):
+        raise ValueError('checkpoint expectation names an unknown ID')
+    if descriptions:
+        workflow['expectations'] = descriptions
+    return workflow
+
+
 def repair_spec(contract, previous=None):
     """A delegated repair must change behavior, not commission another observation."""
     repair = contract.get('repair')
     if not isinstance(repair, dict) or any(not text(repair.get(k)) for k in ('goal', 'behavior', 'criterion')):
         raise ValueError('repair needs a persistent goal, positive behavior and criterion; perform investigations in diagnosis, not another repair Agent')
     old = ((previous or {}).get('contract') or {}).get('repair') or {}
+    old_scope = (((previous or {}).get('contract') or {}).get('workflow') or {}).get('scope')
+    if not isinstance(contract.get('workflow'), dict):
+        raise ValueError('repair requires a complete workflow with its real entrypoint and focused command')
+    new_scope = contract['workflow'].get('scope')
+    if new_scope and old_scope != new_scope:
+        old = {}
     if old.get('goal') and repair['goal'] != old['goal']:
         raise ValueError('retain the repair goal across follow-ups; narrow implementation, not the goal')
     for key in ('implementation_paths', 'regression_paths'):
@@ -31,7 +69,7 @@ def repair_spec(contract, previous=None):
         raise ValueError('implementation and regression files must be separate')
     if repair['criterion'] not in {c.get('id') for c in contract.get('criteria', [])}:
         raise ValueError('repair criterion must name a prescribed positive check')
-    workflow = contract.get('workflow')
+    workflow = normalize_workflow(contract.get('workflow'))
     if not isinstance(workflow, dict) or any(not text(workflow.get(k)) for k in ('entrypoint', 'command')):
         raise ValueError('repair requires a complete workflow with its real entrypoint and focused command')
     checkpoints = workflow.get('checkpoints')
@@ -44,7 +82,10 @@ def repair_spec(contract, previous=None):
     advances = repair.get('advances')
     if not isinstance(advances, list) or not advances or any(v not in checkpoints for v in advances):
         raise ValueError('repair must advance named workflow checkpoints, not only a standalone component')
-    old_workflow = ((previous or {}).get('contract') or {}).get('workflow')
+    old_workflow = normalize_workflow(((previous or {}).get('contract') or {}).get('workflow'))
+    # An unbound legacy subtask must not freeze the newly requirement-bound workflow.
+    if workflow.get('scope') and old_workflow and old_workflow.get('scope') != workflow['scope']:
+        old_workflow = None
     if old_workflow and workflow != old_workflow:
         raise ValueError('retain the complete workflow and checkpoints across follow-ups')
     return repair
@@ -119,7 +160,7 @@ def implementation_evidence(receipt, assigned, checkout):
     workflow_digests = {name: digests[name] for name in workflow['regression_paths']}
     if prior and prior.get('regression_digests') != workflow_digests:
         raise ValueError('workflow assertions changed between repair rounds')
-    receipt['implementation'] = dict(workflow=dict(checks=final, regression_digests=workflow_digests), goal=repair['goal'], before=before, changed=sorted(changed),
+    receipt['implementation'] = dict(workflow=dict(scope=workflow.get('scope'), checks=final, regression_digests=workflow_digests), goal=repair['goal'], before=before, changed=sorted(changed),
         baseline_digest=hashlib.sha256(log).hexdigest(), regression_digests=digests)
     return receipt
 

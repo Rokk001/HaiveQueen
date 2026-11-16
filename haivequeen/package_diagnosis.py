@@ -5,7 +5,7 @@ import math
 import re
 from pathlib import Path
 
-from . import bees, db, repair_contract, repair_review, roles, runtime
+from . import bees, db, repair_contract, repair_review, repair_scope, roles, runtime
 
 
 def _digest(value):
@@ -27,12 +27,17 @@ def scope(conn, project, plan, package, commit):
             digest.update(b'\n')
     return {'commit': commit, 'failure_log': 'package-attempts:' + digest.hexdigest(),
             'decisions': _digest(known),
+            'requirements': repair_scope.reference(conn, project, plan, package)['id'],
             'completion_generation': completion_generation(conn, project, plan, package)}
 
 
 def _load(conn, project, plan, package):
     raw = runtime.kv_get(conn, project, _key(plan, package))
     return json.loads(raw) if raw else {}
+
+
+def scoped_progress(receipt, scope_id):
+    return ((receipt or {}).get('implementation', {}).get('workflow') or {}).get('scope') == scope_id
 
 
 def unchanged_retry(state, current):
@@ -98,7 +103,8 @@ def continuation(conn, project, plan, package, state, report, selected):
         raise ValueError('continuation must review the last accepted diagnosis and latest repair attempt')
     if follow.get('outcome') not in ('no_progress', 'partial', 'step_complete'):
         raise ValueError('continuation must distinguish no_progress, partial and step_complete')
-    if follow.get('outcome') == 'step_complete' and not (state.get('progress', {}).get(follow['attempt']) or {}).get('implementation', {}).get('workflow'):
+    if follow.get('outcome') == 'step_complete' and not scoped_progress(state.get('progress', {}).get(follow['attempt']),
+            repair_scope.reference(conn, project, plan, package)['id']):
         raise ValueError('step_complete requires a verified repair receipt')
     for field in ('reason', 'target', 'change', 'verification'):
         if not isinstance(follow.get(field), str) or not follow[field].strip():
@@ -136,14 +142,18 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
         experiment = None
         latest = bees.attempt_history(conn, project, plan, package, limit=1)['attempts']
         progress = state.get('progress', {}).get(latest[0]['attempt']) if latest else None
-        verified_progress = progress and progress.get('implementation', {}).get('workflow') and progress.get('commit') == expected['commit']
+        verified_progress = scoped_progress(progress, expected['requirements']) and progress.get('commit') == expected['commit']
         if report['kind'] == 'technical' and ((unchanged_retry(state, expected) and not verified_progress) or report.get('experiment')):
             experiment = experiment_evidence(report, path, state, expected)
         follow = continuation(conn, project, plan, package, state, report, selected)
         contract = repair_contract.validate(report, state.get('report')) if report['kind'] == 'technical' else None
-        if contract and state.get('workflow_contract') and contract['workflow'] != state['workflow_contract']:
+        if contract:
+            repair_scope.validate(contract, repair_scope.reference(conn, project, plan, package))
+        old_workflow = state.get('workflow_contract') or {}
+        same_workflow_scope = contract and old_workflow.get('scope') == contract['workflow'].get('scope')
+        if same_workflow_scope and contract['workflow'] != old_workflow:
             raise ValueError('retain the persisted complete workflow across diagnoses and restarts')
-        if contract and all(state.get('workflow_progress', {}).get('checks', {}).get(k) == 'passed' for k in contract['repair']['advances']):
+        if same_workflow_scope and all(state.get('workflow_progress', {}).get('checks', {}).get(k) == 'passed' for k in contract['repair']['advances']):
             raise ValueError('selected workflow checkpoints are already satisfied; complete the package or repair a remaining checkpoint')
         if experiment:
             signature = _digest([signature, experiment])
@@ -176,8 +186,11 @@ def accept(conn, project, plan, package, path, expected, current_class, offered)
                                     'action': follow[1] if follow else None}
                      if report['kind'] == 'technical' else None)
         if contract:
+            if old_workflow and not same_workflow_scope:
+                state.setdefault('legacy_workflows', []).append(dict(contract=old_workflow,
+                    progress=state.pop('workflow_progress', None)))
             state['workflow_contract'] = contract['workflow']
-            state['authorization'].update(contract=contract, protocol=4)
+            state['authorization'].update(contract=contract, protocol=5)
         if report['kind'] == 'technical':
             state['accepted_scope'] = dict(expected)
         runtime.kv_set(conn, project, _key(plan, package), json.dumps(state))
@@ -189,7 +202,7 @@ def authorization(conn, project, plan, package, current):
         return None
     state = _load(conn, project, plan, package)
     grant = state.get('authorization')
-    return grant if state.get('scope') == current and grant and grant.get('protocol') == 4 else None
+    return grant if state.get('scope') == current and grant and grant.get('protocol') == 5 else None
 
 
 def consume(conn, project, plan, package, current, attempt=''):
@@ -198,7 +211,7 @@ def consume(conn, project, plan, package, current, attempt=''):
         if scope(conn, project, plan, package, current['commit']) != current:
             return False
         state = _load(conn, project, plan, package)
-        if state.get('scope') != current or (state.get('authorization') or {}).get('protocol') != 4:
+        if state.get('scope') != current or (state.get('authorization') or {}).get('protocol') != 5:
             return False
         scopes = state.setdefault('consumed_scopes', [])
         basis = {k: current[k] for k in ('commit', 'decisions')}
@@ -226,6 +239,7 @@ def prompt(conn, project, plan, package, commit, output_path, current_class, off
                'bzz agent history --project %s --plan %s --package %s\n'
                'bzz decisions list --project %s\n' % tuple(json.dumps(v) for v in (project, plan, package, project)))
     sources += '\n' + roles.role_text('repair-contract') + '\n'
+    sources += repair_scope.instruction(repair_scope.reference(conn, project, plan, package))
     previous = _load(conn, project, plan, package).get('report', {})
     if previous:
         sources += '\n' + roles.role_text('package-continuation', {'previous': json.dumps(_digest(previous))}) + '\n'
@@ -240,25 +254,20 @@ def prompt(conn, project, plan, package, commit, output_path, current_class, off
     state = _load(conn, project, plan, package)
     latest = history.get('attempts', [])
     progress = state.get('progress', {}).get(latest[0]['attempt']) if latest else None
-    observation = (state.get('observations', {}).get(latest[0]['attempt']) if latest else None) or (progress if progress and not progress.get('implementation', {}).get('workflow') else None)
+    verified_progress = scoped_progress(progress, current['requirements'])
+    observation = (state.get('observations', {}).get(latest[0]['attempt']) if latest else None) or (progress if progress and not verified_progress else None)
     if observation:
         sources += '\nPrior step lacks complete-workflow evidence; reuse ' + observation['result_path'] + '; do not report step_complete or delegate another investigation.\n'
-    if progress and progress.get('implementation', {}).get('workflow'):
+    if verified_progress:
         sources += ('\nThe latest assigned repair step passed every recorded criterion. The package is still open. '
                     'Do not treat remaining package requirements as failure of that step. Reuse its receipt at '
                     + progress['result_path'] + '; select the next behavior-changing repair, reusing the findings.\n')
-    if unchanged_retry(state, current) and not (progress or {}).get('implementation', {}).get('workflow'):
-        sources += ('\nUNCHANGED CODE AFTER AN AUTHORIZED REPAIR: another history entry, renamed agent, '
-                    'paraphrased approach or higher model class is not new evidence. Do not authorize '
-                    'the same broad task again. Investigate why the previous repair produced no verified '
-                    'progress and perform one narrow, safe experiment (focused reproduction, coordination '
-                    'probe or execution-environment check). Preserve project files and running processes. '
-                    'Record its actual output in this diagnosis run directory. For a technical retry, add '
-                    'experiment: {question, command, exit: integer, finding, log: relative filename} to '
-                    'the JSON. Explain in why_new how this observation changes the next bounded repair '
-                    'step and name its focused verification. Do not fabricate an experiment or just copy '
-                    'a previous report. If blocked by an actual external prerequisite, identify that '
-                    'prerequisite; exhausted attempts alone remain a technical problem.\n')
+    if unchanged_retry(state, current) and not verified_progress:
+        sources += ('\nUNCHANGED CODE: renamed attempts or paraphrases are not progress. Reuse findings; '
+                    'resolve a concrete evidence gap with one safe focused experiment, preserving files and '
+                    'processes. Add experiment: {question, command, exit: integer, finding, log: relative filename} '
+                    'with actual output in this run directory. Explain how it changes the next repair. '
+                    'Only actual external prerequisites justify questions; exhausted retries do not.\n')
     return roles.role_text('diagnosis', {
         'output_path': output_path, 'commit': commit,
         'failure_log': 'HQ supplies this identity from the scheduled run; omit failure_log',
@@ -431,6 +440,18 @@ def advance(env, free_mb, alive=None):
             try:
                 if head != state['scope']['commit']:
                     raise ValueError('The package commit changed during diagnosis')
+                report_path = env.run_dir(state['agent']) / 'package-diagnosis.json'
+                candidate = repair_review.read(report_path, head, state['scope']['failure_log'],
+                    repair_review.decisions(conn, env.name, plan),
+                    bound_failure=state.get('report_path') == str(report_path.resolve()))
+                if candidate['kind'] == 'technical':
+                    repair_contract.validate(candidate, state.get('report'))
+                    verdict, reason = repair_scope.review(env, plan, package, candidate,
+                        checkout(env, plan, package), free_mb, alive or platform.process_alive)
+                    if verdict == 'pending':
+                        continue
+                    if verdict != 'passed':
+                        raise ValueError('Workflow scope review: ' + reason)
                 report = accept(conn, env.name, plan, package,
                                 env.run_dir(state['agent']) / 'package-diagnosis.json',
                                 state['scope'], state['current_class'], offered)

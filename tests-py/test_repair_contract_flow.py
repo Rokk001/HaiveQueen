@@ -35,6 +35,8 @@ class RepairContractFlow(RoundCase):
                 workflow=dict(entrypoint='activation.main', command='python workflow.py', checkpoints=['value','cleanup'], regression_paths=['test_activation.py']),
                 criteria=[dict(id='reject', expectation='Reject changed candidate', check='python -m unittest changed'),
                           dict(id='cleanup', expectation='Release owned reservation on rejection', check='python -m unittest cleanup')]))
+        reference = diagnosis.repair_scope.reference(self.conn, 'testproj', REL, 'P1')
+        data['contract']['workflow'].update(scope=reference['id'], coverage={key: ['value','cleanup'] for key in reference['requirements']})
         state = diagnosis._load(self.conn, 'testproj', REL, 'P1')
         if state.get('workflow_progress', {}).get('checks', {}).get('value') == 'passed':
             data['contract']['repair']['advances'] = ['cleanup']
@@ -77,7 +79,7 @@ class RepairContractFlow(RoundCase):
         with mock.patch.dict('os.environ', {'BZZ_AGENT': 'queen'}), \
              mock.patch.object(cli.config, 'load_config', return_value=self.machine), \
              mock.patch('haivequeen.package_diagnosis.current_commit', return_value=head), \
-             (contextlib.nullcontext() if real_evidence else mock.patch('haivequeen.repair_contract.implementation_evidence', side_effect=lambda receipt, *args: receipt.update(implementation={'goal': 'Safe activation', 'workflow': {'checks': {'value':'passed','cleanup':'failed'}, 'regression_digests':{}}}))), \
+             (contextlib.nullcontext() if real_evidence else mock.patch('haivequeen.repair_contract.implementation_evidence', side_effect=lambda receipt, *args: receipt.update(implementation={'goal': 'Safe activation', 'workflow': {'scope': args[0]['contract']['workflow']['scope'], 'checks': {'value':'passed','cleanup':'failed'}, 'regression_digests':{}}}))), \
              contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             status = cli.cmd_bee(args, self.conn)
         return status, output.getvalue()

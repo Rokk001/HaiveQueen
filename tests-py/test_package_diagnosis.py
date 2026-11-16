@@ -11,6 +11,9 @@ class PackageDiagnosis(RoundCase):
         super().setUp()
         self.review = package_diagnosis
         self.record('failed-1')
+        patcher = mock.patch('haivequeen.repair_scope.review', return_value=('passed', ''))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def record(self, attempt, package='P1'):
         bees.record_attempt(self.conn, 'testproj', REL, package, 'medium', 'failed',
@@ -30,6 +33,8 @@ class PackageDiagnosis(RoundCase):
             repair=dict(goal='Correct caller behavior', behavior='Caller accepts argument', criterion='caller', implementation_paths=['caller.py'], regression_paths=['test_caller.py'], advances=['caller']),
             workflow=dict(entrypoint='caller.main', command='python -m unittest caller', checkpoints=['caller'], regression_paths=['test_caller.py']),
             criteria=[dict(id='caller', expectation='Caller accepts the argument', check='python -m unittest caller')])
+        reference = self.review.repair_scope.reference(self.conn, 'testproj', REL, 'P1')
+        report['contract']['workflow'].update(scope=reference['id'], coverage={key: ['caller'] for key in reference['requirements']})
         previous = self.review._load(self.conn, 'testproj', REL, 'P1').get('report')
         if previous:
             latest = bees.attempt_history(self.conn, 'testproj', REL, 'P1', limit=1)['attempts'][0]['attempt']
@@ -401,7 +406,7 @@ class DiagnosisReportBinding(PackageDiagnosis):
             self.review.advance(env, 16384, alive=lambda pid: False)
         state = self.review._load(self.conn, env.name, REL, 'P1')
         self.assertEqual(state['phase'], 'authorized')
-        self.assertEqual(state['authorization']['protocol'], 4)
+        self.assertEqual(state['authorization']['protocol'], 5)
         self.assertEqual(runtime.list_questions(self.conn, env.name, status='open'), [])
         self.assertEqual(bees.failure_count(self.conn, env.name, REL, 'P1', 'medium'), 1)
 

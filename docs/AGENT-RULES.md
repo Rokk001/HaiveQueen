@@ -59,3 +59,12 @@ Follow-up package diagnoses additionally load `roles/package-continuation.md` th
 Package diagnoses also load `roles/repair-contract.md` through `package_diagnosis.prompt`. Accepted technical grants append `roles/repair-result.md` only to the diagnosed repair Agent through `package_diagnosis.accept`. Ordinary Agent starts do not load these protocols. The Queen's short receipt-review and result-routing instruction lives in `roles/queen.md`. A verified behavior-changing repair in an unfinished package uses outcome `progress`, with baseline, unchanged-regression and full-workflow progress evidence; observations or unused components alone do not qualify.
 
 Implementation references: `haivequeen/roles.py` (`role_text`), `haivequeen/bees.py` (`bee_prompt`, `queen_instructions`, `_start_process_locked`), `haivequeen/hives.py` (`schedule_round`), `haivequeen/profile.py` (`rule_entries`, `project_rules`, `queen_load`), `haivequeen/plans.py` (`state_file_path`), `haivequeen/loop.py` (`_do_start`), and `haivequeen/agent_runner.py` (`report_prompt` and rules-file construction). Recheck these paths when changing the startup contract; keep this section aligned with the implementation.
+
+### Requirement-bound repair review
+
+A new diagnostic workflow is independently checked once against the package's submitted
+requirements and active decisions before retry dispatch. HQ reuses that verdict for the
+same workflow across rounds and restarts. The checker receives only package requirements,
+workflow and retrieval references; it neither implements the plan nor launches production
+work. Requirements coverage, descriptive checkpoint objects and legacy transition are
+specified in [Package diagnosis progress](PACKAGE-DIAGNOSIS-PROGRESS.md#requirement-bound-workflows-protocol-5).

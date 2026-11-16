@@ -213,3 +213,46 @@ logs and active processes are preserved. Tests cover an actual unused component 
 a passing unit check and still-failing caller flow, real integration success, changed
 workflow definitions/assertions, regressed checkpoints, satisfied-checkpoint recycling,
 legacy grants/receipts and persistence across restart.
+
+## Requirement-bound workflows (protocol 5)
+
+Two gaps remained in protocol 4: checkpoint objects were rejected despite the
+underspecified prompt, and the diagnosis itself could define a helper test as the
+complete workflow. Checkpoints now accept unique string IDs or `{id, expectation}`
+objects; normalization preserves expectations and rejects duplicate IDs, missing
+fields and contradictory descriptions. Format correction reuses existing findings
+and logs rather than repeating a probe.
+
+HQ derives a scope fingerprint from the submitted package requirements, package
+assignment and active decisions. Submitted requirement text takes precedence over
+working-copy edits; state-file definitions supply requirements added after submission.
+Legacy packages without requirement IDs use their package identity/title. Missing
+assigned definitions or missing submission evidence block authorization explicitly.
+The prompt includes only this package scope and retrieval references, not the full
+plan or history. A workflow must name the supplied `scope` and `coverage` for every
+requirement. Each coverage value lists checkpoint IDs, or names an active decision
+and reason for exclusion. A test file is not a product entrypoint.
+
+Because attaching IDs to helper tests is not semantic proof, a new workflow receives
+one independent, asynchronous scope review using the existing check-agent provider,
+class, resource and pause controls. The reviewer checks the proposed complete product
+path against requirements and decisions; it does not implement the plan or require
+already completed implementation. Missing activation, failure or recovery boundaries
+are returned as concrete feedback. A durable fingerprint caches the result across
+restarts and repair rounds; unchanged proposals do not create more review agents.
+A changed workflow or source scope needs a new review. Existing bounded diagnosis
+correction and owner escalation apply when review fails or produces no valid verdict.
+No repair retry is dispatched while this review is pending or unsuccessful.
+
+Protocol-4 grants cannot dispatch. Old unbound workflow contracts/results remain
+historical evidence, but cannot freeze a new requirement-bound goal or claim current
+workflow progress. Existing failure/attempt history remains intact. New progress
+receipts carry the scope fingerprint; changed requirements or decisions invalidate
+stale grants and progress credit. No running process or project plan is changed.
+A passed scope review is a semantic review, not proof of implementation: subsequent
+red/green workflow evidence and the final ready gate remain required.
+
+Focused regressions cover descriptive/legacy checkpoint formats, malformed/duplicate
+IDs, first-report narrowing, source and decision binding, legacy migration, exclusion
+references, cached independent review, scheduler wait/review/dispatch, and the existing
+real failing-before/passing-after workflow receipt through subsequent repair dispatch.

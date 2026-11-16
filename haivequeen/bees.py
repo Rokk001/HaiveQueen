@@ -886,7 +886,7 @@ def _report_attempt(env, plan, package, cls, outcome, attempt, open_requirements
         state = package_diagnosis._load(env.conn, env.name, plan, package)
         receipt = repair_contract.result(repair_result, state.get('assigned'), attempt,
                                          package_diagnosis.current_commit(env, plan, package))
-        if state.get('assigned', {}).get('contract', {}).get('workflow'):
+        if state.get('assigned', {}).get('contract', {}).get('workflow', {}).get('scope'):
             repair_contract.implementation_evidence(receipt, state['assigned'], package_diagnosis.checkout(env, plan, package))
         else:
             outcome = 'observed'  # Preserve an in-flight legacy result without promoting it to a repair.
