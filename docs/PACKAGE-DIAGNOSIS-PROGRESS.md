@@ -308,3 +308,19 @@ rejections report the measured category and largest structured fields so correct
 can target duplication without repeating investigation. Oversized, malformed or
 invalid reports never grant a repair retry. Existing owner questions are not
 silently answered or cleared by installing this change.
+
+## Focused repair steps without per-step workflow runs
+
+A repair step is proven by its focused criterion: the unchanged positive check fails
+on the assigned baseline and passes on the changed implementation commit, with
+identical regression snapshots. The receipt's `workflow` field is optional. Without
+it, HQ records the step as progress, keeps the previous workflow checkpoint results
+unchanged and still rejects changed workflow assertions between rounds. The
+complete workflow runs once as the package's completion evidence, not before and
+after every step; when a receipt does include workflow results, the stricter
+checkpoint rules above apply. Repair roles and diagnosis instructions forbid running
+the complete workflow or the whole suite for a step and forbid building or
+rebuilding a test environment (installations, release or authority fixtures,
+complete-workflow harnesses). A missing environment capability is reported as a
+finding of the complete test. `roles/bee.md` states the same rule for every Agent.
+Focused regression: `python -m unittest discover -s tests-py -p test_repair_implementation.py -v`.

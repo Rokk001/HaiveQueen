@@ -177,8 +177,8 @@ def accept(conn, project, plan, package, path, expected, current_class, offered,
             instruction += '\nNew observation: ' + report['experiment']['finding'] + '\nEvidence: ' + state['experiment_log']
         if report['kind'] == 'technical':
             instruction += ('\nRepair the diagnosed boundary first, with a failing-before regression and '
-                            'focused passing verification. Supporting fixture changes alone do not complete '
-                            'this repair unless fixtures are the diagnosed cause. Report the exact remaining '
+                            'focused passing verification; do not run the complete workflow or whole suite '
+                            'for this step and never build or rebuild a test environment. Report the exact remaining '
                             'boundary and evidence if only partial progress is possible; do not substitute '
                             'a broader package task for this scoped repair.')
         state.update(scope=expected, report=report, accepted=[*accepted, signature],

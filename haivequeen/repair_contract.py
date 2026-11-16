@@ -171,9 +171,20 @@ def implementation_evidence(receipt, assigned, checkout):
             raise ValueError('regression assertions changed after the failing baseline')
         digests[name] = hashlib.sha256(contents).hexdigest()
     workflow = assigned['contract']['workflow']
+    prior = assigned.get('workflow_progress') or {}
+    workflow_digests = {name: digests[name] for name in workflow['regression_paths']}
+    if prior.get('regression_digests') and prior['regression_digests'] != workflow_digests:
+        raise ValueError('workflow assertions changed between repair rounds')
     evidence = receipt.get('workflow')
+    if evidence is None:
+        # A repair step is proven by its focused red/green criterion; the complete
+        # workflow runs once as the package's completion evidence, not per step.
+        receipt['implementation'] = dict(workflow=dict(scope=workflow.get('scope'), checks=dict(prior.get('checks') or {}),
+            regression_digests=workflow_digests), goal=repair['goal'], before=before, changed=sorted(changed),
+            baseline_digest=hashlib.sha256(log).hexdigest(), regression_digests=digests, focused=True)
+        return receipt
     if not isinstance(evidence, dict) or evidence.get('command') != workflow['command']:
-        raise ValueError('progress requires before and after evidence for the complete workflow')
+        raise ValueError('optional workflow evidence must name the contract workflow command')
     def outcomes(name):
         try:
             result = json.loads(evidence_file(name))
@@ -187,15 +198,11 @@ def implementation_evidence(receipt, assigned, checkout):
             raise ValueError('workflow evidence must cover every checkpoint with a consistent exit code')
         return checks
     initial, final = outcomes(evidence.get('before')), outcomes(evidence.get('after'))
-    prior = assigned.get('workflow_progress') or {}
     for key, status in {**prior.get('checks', {}), **{k:v for k,v in initial.items() if v == 'passed'}}.items():
         if status == 'passed' and (initial.get(key) != 'passed' or final.get(key) != 'passed'):
             raise ValueError('repair regressed a previously passing workflow checkpoint')
     if not any(initial[key] == 'failed' and final[key] == 'passed' for key in repair['advances']):
         raise ValueError('standalone component changed but no required workflow checkpoint improved')
-    workflow_digests = {name: digests[name] for name in workflow['regression_paths']}
-    if prior and prior.get('regression_digests') != workflow_digests:
-        raise ValueError('workflow assertions changed between repair rounds')
     receipt['implementation'] = dict(workflow=dict(scope=workflow.get('scope'), checks=final, regression_digests=workflow_digests), goal=repair['goal'], before=before, changed=sorted(changed),
         baseline_digest=hashlib.sha256(log).hexdigest(), regression_digests=digests)
     return receipt

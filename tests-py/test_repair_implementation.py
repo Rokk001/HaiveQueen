@@ -52,12 +52,14 @@ class ImplementationEvidence(unittest.TestCase):
         run = subprocess.run([sys.executable, '-B', 'workflow.py'], cwd=self.repo, capture_output=True, text=True, timeout=10)
         (self.logs / log).write_text(run.stdout)
 
-    def receipt(self):
+    def receipt(self, workflow=True):
         result = self.check(); self.assertEqual(result.returncode, 0, result.stderr)
         (self.logs / 'after.log').write_text((result.stdout + result.stderr) or 'check returned 0')
-        self.workflow_run('workflow-after.log')
-        data = dict(workflow=dict(command='python -B workflow.py', before='workflow-before.log', after='workflow-after.log'), attempt='repair', contract=self.assigned['id'], commit=self.git('rev-parse', 'HEAD'),
+        data = dict(attempt='repair', contract=self.assigned['id'], commit=self.git('rev-parse', 'HEAD'),
             baseline=self.baseline, checks=[dict(id='value', command=self.command, exit=0, log='after.log')])
+        if workflow:
+            self.workflow_run('workflow-after.log')
+            data['workflow'] = dict(command='python -B workflow.py', before='workflow-before.log', after='workflow-after.log')
         path = self.logs / 'receipt.json'; path.write_text(json.dumps(data))
         return repair_contract.result(path, self.assigned, 'repair', data['commit'])
 
@@ -114,3 +116,22 @@ class ImplementationEvidence(unittest.TestCase):
         self.assigned['workflow_progress'] = dict(checks={'value':'passed'})
         with self.assertRaisesRegex(ValueError, 'regressed'):
             repair_contract.implementation_evidence(receipt, self.assigned, self.repo)
+
+    def test_focused_red_green_step_is_progress_without_a_workflow_run(self):
+        self.fix()
+        receipt = repair_contract.implementation_evidence(self.receipt(workflow=False), self.assigned, self.repo)
+        self.assertTrue(receipt['implementation']['focused'])
+        self.assertEqual(receipt['implementation']['changed'], ['subject.py'])
+        self.assertEqual(receipt['implementation']['workflow']['scope'], self.assigned['contract']['workflow'].get('scope'))
+
+    def test_focused_step_cannot_change_workflow_assertions_between_rounds(self):
+        self.fix(); receipt = self.receipt(workflow=False)
+        self.assigned['workflow_progress'] = dict(checks={'value':'failed'}, regression_digests={'workflow.py':'old'})
+        with self.assertRaisesRegex(ValueError, 'workflow assertions changed'):
+            repair_contract.implementation_evidence(receipt, self.assigned, self.repo)
+
+    def test_repair_roles_forbid_per_step_workflow_runs_and_test_environments(self):
+        from haivequeen import roles
+        for name in ('repair-result', 'repair-contract', 'bee'):
+            with self.subTest(role=name):
+                self.assertRegex(roles.role_text(name) if name != 'bee' else (roles.ROLES_DIR / 'bee.md').read_text(encoding='utf-8'), r'Never (prescribe )?build(ing)? or rebuild(ing)? a test environment')

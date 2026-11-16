@@ -261,7 +261,7 @@ class PackageDiagnosis(RoundCase):
         self.review.accept(self.conn, 'testproj', REL, 'P1',
             self.report(current, experiment=self.experiment('new-run.txt')), current, 'medium', ['medium'])
         grant = self.review.authorization(self.conn, 'testproj', REL, 'P1', current)
-        self.assertIn('Supporting fixture changes alone do not complete', grant['instruction'])
+        self.assertIn('never build or rebuild a test environment', grant['instruction'])
         self.assertIn('Correct the caller', grant['instruction'])
         self.assertTrue(self.review.consume(self.conn, 'testproj', REL, 'P1', current))
         self.assertFalse(self.review.consume(self.conn, 'testproj', REL, 'P1', current))
