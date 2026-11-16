@@ -5,7 +5,10 @@ its root object to an authenticated commit, environment and live process before
 using it for any compatibility decision.
 """
 import hashlib
+import importlib.util
+import marshal
 from pathlib import Path, PurePosixPath
+import re
 
 
 def _object_hash(kind, data):
@@ -120,6 +123,12 @@ def verify_installation(directory, entries, expected_tree, generated):
             name = path.relative_to(root).as_posix()
             if not path.is_file() and not path.is_dir():
                 return False
+            if '__pycache__' in path.parts:
+                if path.is_dir() and path.name == '__pycache__':
+                    continue
+                if not _verified_cache(root, path, expected):
+                    return False
+                continue
             actual[name] = path
         if set(actual) != set(expected) | set(generated):
             return False
@@ -131,4 +140,29 @@ def verify_installation(directory, entries, expected_tree, generated):
                 return False
         return all(actual[name].is_file() and actual[name].read_bytes() == value for name, value in generated.items())
     except (OSError, ValueError, TypeError, KeyError, UnicodeError):
+        return False
+
+
+def _verified_cache(root, path, expected):
+    """Accept only local-interpreter bytecode equivalent to verified source.
+
+    Imports create caches in an otherwise immutable installation. Ignoring
+    arbitrary executable caches would weaken the source-identity check.
+    Compile without executing and compare code objects instead.
+    """
+    try:
+        if not path.is_file() or path.parent.name != '__pycache__':
+            return False
+        source = Path(importlib.util.source_from_cache(str(path)))
+        name = source.relative_to(root).as_posix()
+        if name not in expected or expected[name][1] != 'blob':
+            return False
+        data = path.read_bytes()
+        if len(data) < 16 or data[:4] != importlib.util.MAGIC_NUMBER:
+            return False
+        match = re.search(r'\.opt-([012])\.pyc$', path.name)
+        optimize = int(match[1]) if match else 0
+        code = compile(source.read_bytes(), str(source), 'exec', dont_inherit=True, optimize=optimize)
+        return marshal.loads(data[16:]) == code
+    except (OSError, ValueError, TypeError, KeyError, EOFError, SyntaxError):
         return False

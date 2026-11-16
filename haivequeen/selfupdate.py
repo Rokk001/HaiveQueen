@@ -385,7 +385,8 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
                        timeout=ROUND_TIMEOUT, stage=None, jobs=None,
                        activate=None, receipt=None, start=None, loop_pid=None):
     """Stage and switch an immutable release; retain running work when compatible."""
-    from . import release_activation, release_compat, release_staging, updates, version_layout
+    from . import release_activation, release_compat, release_contract, release_staging, updates, version_layout
+    from .stable_launcher import lifetime_lock
     root = Path(root)
     default_stage = stage is None
     stage = stage or release_staging.stage_release
@@ -413,17 +414,22 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
                 target = stage(root, repository, version)
         if not release_staging.verify_installed(target, repository, version):
             raise RuntimeError('installed release could not be independently verified')
-        # Byte identity alone does not establish live-process, dependency or
-        # shared-state compatibility, nor exclude a launch during activation.
-        # Until those proofs exist, activation must be deferred.
-        info = {'compatible': False, 'reason': release_compat.UNKNOWN_REASON}
-        # Immutable legacy launchers and version-local code do not honour a
-        # new admission gate. Even an empty locked snapshot cannot rule out a
-        # legacy caller queued on the lock or one that launches later. Do not
-        # drain or publish the pointer until that exclusion can be proved.
-        note = 'update deferred: cannot exclude legacy launches during activation'
-        end_row(conn, row, old, 'failed', note)
-        return {'result': 'deferred', 'note': note, 'old': old, 'new': old}
+        # Every installed/launchable HQ version is included, not merely the
+        # currently observed processes. Queued supported old launches therefore
+        # remain compatible after this lock is released.
+        authority = release_contract.prepare(root, repository)
+        if not authority:
+            # Unknown installations need no publication lock: no pointer or
+            # scheduling state changes. This also permits callers already
+            # holding the lifetime lock to obtain a conservative deferral.
+            info = {'known': False, 'reason': release_compat.UNKNOWN_REASON}
+        else:
+            with lifetime_lock(root):
+                info = release_contract.assess(root, version, old, authority)
+        if not info['known']:
+            note = 'update deferred: ' + info['reason']
+            end_row(conn, row, old, 'failed', note)
+            return {'result': 'deferred', 'note': note, 'old': old, 'new': old}
         if not info['compatible']:
             status = release_compat.begin_wait(conn, target, jobs=jobs, decision=info)
             while True:
@@ -471,7 +477,7 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
             raise RuntimeError('installed release changed before activation')
         passed = activate(root, version, first_round, after_rollback=recover_old,
                           installation_token=installation_token,
-                          target_verifier=lambda: release_staging.verify_installed(target, repository, version))
+                          target_verifier=lambda: release_contract.assess(root, version, old, authority)['compatible'])
         if passed:
             result, note = 'ok', 'updated to version ' + version
         else:

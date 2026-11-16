@@ -43,7 +43,7 @@ class ReleaseCliProcessTest(RoundCase):
         self._compatible_switch(public=True, adoption=True)
 
     def test_public_install_stages_downloaded_archive(self):
-        self._compatible_switch(public=True, download=True)
+        self._compatible_switch(public=True, download=True, launched=True, adoption=True)
 
     def test_published_unknown_waits_for_jobs(self):
         self._compatible_switch(public=True, download=True, incompatible=True, reason=release_compat.UNKNOWN_REASON)
@@ -131,48 +131,46 @@ class ReleaseCliProcessTest(RoundCase):
         server = None
         requests = []
         if download:
-            archive = self.base / 'release.zip'
-            with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as release:
-                for folder in ('haivequeen', 'roles'):
-                    for path in (source / folder).rglob('*'):
-                        if path.is_file() and '__pycache__' not in path.parts and path.suffix != '.pyc':
-                            release.write(path, 'release/' + path.relative_to(source).as_posix())
-                release.writestr('release/haivequeen-update.json', '{"compatible_with_older": true}')
-            payload = archive.read_bytes()
-
+            from release_authority_fixture import authority, responses, package_files
+            from haivequeen import release_staging
+            reply = {}
             class ReleaseHandler(BaseHTTPRequestHandler):
                 def do_GET(self):
                     requests.append((self.path, self.headers.get('User-Agent')))
-                    sha = 'a' * 40
-                    if incompatible and '/git/ref/tags/' in self.path:
-                        data = json.dumps({'object': {'type': 'commit', 'sha': sha}}).encode()
-                    elif incompatible and '/releases/tags/' in self.path:
-                        repository = self.path.split('/repos/', 1)[1].split('/releases/', 1)[0]
-                        decision = releases.release_decision(repository, '2.0.0', sha)
-                        data = json.dumps({'tag_name': 'v2.0.0', 'body': json.dumps(decision)}).encode()
-                    else:
-                        data = payload
-                    self.send_response(200)
+                    suffix = '/' + self.path.split('/', 4)[4]
+                    data = reply.get(suffix)
+                    self.send_response(200 if data is not None else 404)
+                    data = data or b'not found'
                     self.send_header('Content-Length', str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)
-
                 def log_message(self, format, *args):
                     pass
-
             server = ThreadingHTTPServer(('127.0.0.1', 0), ReleaseHandler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
-            # Redirect only the URL in this isolated installation; Request and
-            # urlopen execute unchanged in the detached release worker.
-            staging = root / 'versions' / '1.0.0' / 'haivequeen' / 'release_staging.py'
-            code = staging.read_text(encoding='utf-8')
-            code = code.replace('https://api.github.com/repos/',
-                                'http://127.0.0.1:%s/repos/' % server.server_port)
-            staging.write_text(code, encoding='utf-8')
-            worker = root / 'versions' / '1.0.0' / 'haivequeen' / 'selfupdate.py'
-            code = worker.read_text(encoding='utf-8').replace('poll=5.0,\n                       timeout=ROUND_TIMEOUT', 'poll=0.1,\n                       timeout=ROUND_TIMEOUT')
-            worker.write_text(code, encoding='utf-8')
+            files = package_files(source)
+            api = 'http://127.0.0.1:%s/repos/' % server.server_port
+            files['haivequeen/release_staging.py'] = files['haivequeen/release_staging.py'].replace(
+                b'https://api.github.com/repos/', api.encode())
+            # Only test pacing changes; both authenticated releases contain it.
+            files['haivequeen/selfupdate.py'] = files['haivequeen/selfupdate.py'].replace(
+                b'poll=5.0,\n                       timeout=ROUND_TIMEOUT',
+                b'poll=0.1,\n                       timeout=ROUND_TIMEOUT')
+            files['haivequeen/release_message.py'] = b'MESSAGE = "old application message"\n'
+            old_authority = authority(files, '1.0.0')
+            files = dict(files)
+            files['haivequeen/release_message.py'] = b'MESSAGE = "new application message"\n'
+            target_authority = authority(files, '2.0.0')
+            reply.update(responses({'1.0.0': old_authority, '2.0.0': target_authority}))
+            shutil.rmtree(root / 'versions' / '1.0.0')
+            def fetch(address):
+                from urllib.request import Request, urlopen
+                request = Request(address.replace('https://api.github.com/repos/', api),
+                                  headers={'User-Agent': 'HaiveQueen'})
+                with urlopen(request, timeout=15) as response:
+                    return response.read()
+            release_staging.stage_release(root, updates.repository(self.machine), '1.0.0', fetch)
         else:
             (root / 'versions' / '2.0.0' / 'haivequeen-update.json').write_text(
                 (json.dumps({'compatible_with_older': False, 'reason': reason})
@@ -433,8 +431,9 @@ class ReleaseCliProcessTest(RoundCase):
             self.assertEqual((root / 'active-version').read_text().strip(), '1.0.0' if rollback else '2.0.0')
             if download:
                 self.assertTrue((root / 'versions' / '2.0.0' / 'haivequeen' / 'cli.py').is_file())
-                self.assertEqual(len(requests), 3)
-                self.assertTrue(requests[-1][0].endswith('/zipball/' + ('a' * 40 if incompatible else 'v2.0.0')))
+                self.assertTrue(any(path.endswith('/zipball/' + target_authority['commit']) for path, _ in requests))
+                self.assertTrue(any('/git/trees/' in path for path, _ in requests))
+                self.assertEqual((root / 'versions' / '2.0.0' / 'haivequeen' / 'release_message.py').read_text(), 'MESSAGE = \"new application message\"\n')
                 self.assertTrue(all(agent == 'HaiveQueen' for _, agent in requests))
             if web == 'browser':
                 deadline = time.monotonic() + 30
@@ -580,4 +579,20 @@ class ReleaseCliProcessTest(RoundCase):
                 time.sleep(.05)
             if core is not None:
                 core.wait(timeout=10)
-            web_service.stop()
+            # A core can return before its independently spawned web service
+            # publishes its control endpoint. Stop that owned service once it
+            # is reachable and wait for its inherited log handle to close.
+            deadline = time.monotonic() + 30
+            log = self.base / 'data' / 'web-service.log'
+            while True:
+                web_service.stop()
+                try:
+                    if log.exists():
+                        probe = log.with_suffix('.closed')
+                        log.rename(probe)
+                        probe.rename(log)
+                    break
+                except PermissionError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(.05)

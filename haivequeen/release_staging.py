@@ -40,7 +40,7 @@ def _fetch(address):
         return response.read()
 
 
-def verify_installed(directory, repository, version, fetch=None):
+def verify_installed(directory, repository, version, fetch=None, details=False):
     """Independently re-resolve authority and compare the installed projection.
 
     A true result is only an instant byte comparison; callers cannot infer
@@ -67,7 +67,9 @@ def verify_installed(directory, repository, version, fetch=None):
             release_compat.METADATA: json.dumps(decision or {"compatible_with_older": False, "reason": release_compat.UNKNOWN_REASON}).encode('utf-8'),
             '.haivequeen-release-version': (str(version) + "\n").encode('utf-8'),
         }
-        return release_tree.verify_installation(directory, tree_data['tree'], tree, generated)
+        if not release_tree.verify_installation(directory, tree_data['tree'], tree, generated):
+            return False
+        return {'commit': commit, 'tree': tree, 'entries': tree_data['tree'], 'generated': generated} if details else True
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return False
 
