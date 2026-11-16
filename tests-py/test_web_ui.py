@@ -66,6 +66,14 @@ class BrowserTests(unittest.TestCase):
                                 cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_hives_layout_browser_profiles_are_isolated(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required')
+        result = subprocess.run([node, str(Path(__file__).with_name('web_scroll_runner_test.cjs'))],
+                                cwd=ROOT, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_hives_scroll_only_when_content_exceeds_available_space(self):
         node = shutil.which('node')
         browser = (os.environ.get('HQ_TEST_BROWSER') or shutil.which('chromium')

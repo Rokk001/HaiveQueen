@@ -1,6 +1,7 @@
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {spawnSync}=require('node:child_process');
+const {pathToFileURL}=require('node:url');
 const source=fs.readFileSync(require.resolve('../haivequeen/web-client.js'),'utf8');
 const body=source.slice(source.indexOf('  function fitDashboard(){'),source.indexOf("  window.addEventListener('resize',fitDashboard)"));
 const list={style:{},getBoundingClientRect:()=>({top:100})};
@@ -24,9 +25,11 @@ try{
  const environment={...process.env};
  for(const key of ['HOME','USERPROFILE','LOCALAPPDATA','APPDATA','XDG_DATA_HOME','XDG_CONFIG_HOME','XDG_CACHE_HOME'])environment[key]=temp;
  for(const width of [1280,768,400]){
- const proc=spawnSync(browser,['--headless',...(process.platform==='linux'?['--no-sandbox']:[]),'--disable-gpu','--no-first-run','--no-default-browser-check','--user-data-dir='+path.join(temp,'profile'),'--window-size='+width+',900','--dump-dom','file:///'+file.replaceAll('\\','/')],{encoding:'utf8',timeout:30000,windowsHide:true,env:environment});
+ // Chromium can leave its profile owner alive after --dump-dom exits. A fresh
+ // profile prevents the next viewport from forwarding to that old process.
+ const proc=spawnSync(browser,['--headless',...(process.platform==='linux'?['--no-sandbox']:[]),'--disable-gpu','--no-first-run','--no-default-browser-check','--user-data-dir='+path.join(temp,'profile-'+width),'--window-size='+width+',900','--dump-dom',pathToFileURL(file).href],{encoding:'utf8',timeout:30000,windowsHide:true,env:environment});
  assert.equal(proc.status,0,proc.error?.message||proc.stderr);
- const match=proc.stdout.match(/<pre id="result">([^<]+)<\/pre>/);assert(match,proc.stdout);
+ const match=proc.stdout.match(/<pre id="result">([^<]+)<\/pre>/);assert(match,`No layout result at width ${width}\n${proc.stdout}\n${proc.stderr}`);
  const result=JSON.parse(match[1]);
  assert.equal(result.pipelineFits,true,'Pipeline steps must wrap without horizontal scrolling');
  assert.equal(result.listFits,true,'Hives must fit the available width');
