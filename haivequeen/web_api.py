@@ -353,7 +353,10 @@ def execute(conn, action, data):
         row = runtime.get_agent(conn, project, data['agent'])
         if not row:
             raise ValueError('Unknown Agent')
-        return {'lines': dashboard_data.live_lines(dashboard_data.live_path(row['project'], row['name']))}
+        from . import live_activity
+        path = dashboard_data.live_path(row['project'], row['name'])
+        return {'lines': dashboard_data.live_lines(path),
+                'activity': live_activity.read(path.with_name('events.jsonl'), row.get('status'))}
     if action == 'login/start':
         _, machine, _ = owner.provider_settings(data['provider'])
         provider = next(p for p in sch.get_providers(machine) if p['name'] == data['provider'])

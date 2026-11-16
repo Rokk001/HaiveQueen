@@ -1165,11 +1165,30 @@ function mount(document, bootstrap) {
   function entityStats(parent,values){
     const stats=el('div',undefined,'entity-stats');for(const [label,value] of values){const item=el('div');item.append(el('small',t(label)),el('strong',value??'–'));stats.append(item);}parent.prepend(stats);
   }
+  function renderLiveActivity(run,items){
+    if(!run.activity)return;
+    const expanded=run.expandedActivity||(run.expandedActivity=new Set());
+    const rows=Array.isArray(items)?items:[];
+    const signature=JSON.stringify(rows);if(run.activitySignature===signature)return;run.activitySignature=signature;
+    const ids=new Set(rows.map(item=>item.id));for(const id of expanded)if(!ids.has(id))expanded.delete(id);
+    run.activity.hidden=!rows.length;run.activity.replaceChildren();
+    if(rows.length)run.activity.append(el('h4',t('Recorded activity')));
+    for(const item of rows){
+      const details=el('details',undefined,'live-activity-item');details.open=expanded.has(item.id);
+      const state={running:'Running',completed:'Completed',failed:'Failed',unconfirmed:'Completion not recorded'}[item.state]||'Completion not recorded';
+      details.append(el('summary',t(item.label||'Tool activity')+' · '+t(state)));
+      if(item.command)details.append(el('pre',item.command,'live-activity-command'));
+      if(item.exit!==null && item.exit!==undefined)details.append(el('p',t('Exit code')+': '+item.exit));
+      if(item.output)details.append(el('pre',item.output,'live-activity-output'));
+      details.ontoggle=()=>{if(!details.isConnected)return;if(details.open)expanded.add(item.id);else expanded.delete(item.id);};
+      run.activity.append(details);
+    }
+  }
   async function attachConsole(parent,row){
     const panel=el('section',undefined,'entity-console');panel.append(el('h3',t('Live')+' · '+(row.name||'')));
-    const output=el('pre',t('Loading…'),'live-output');output.setAttribute('aria-label',t('Live'));panel.append(output);parent.append(panel);
+    const activity=el('div',undefined,'live-activity'),output=el('pre',t('Loading…'),'live-output');activity.hidden=true;output.setAttribute('aria-label',t('Live'));panel.append(activity,output);parent.append(panel);
     if(!row.agent && row.kind!=='orch'){output.textContent=t('No live output yet.');return;}
-    const run={project:row.project||row.apiary,agent:row.agent,kind:row.kind,hive:row.hive,output,loading:false,initial:true};liveRuns.set('detail',run);await pollLive(run);
+    const run={project:row.project||row.apiary,agent:row.agent,kind:row.kind,hive:row.hive,activity,output,loading:false,initial:true};liveRuns.set('detail',run);await pollLive(run);
   }
   async function openAgent(row){
     const kind={queen:'Queen',orch:'Orchestrator',fix:'Fix Agent'}[row.kind]||'Agent';
@@ -1946,13 +1965,14 @@ function mount(document, bootstrap) {
   async function openLive(row) {
     const project=row.project || row.apiary,agent=row.agent || row.name,id=JSON.stringify([project,agent]);
     if(liveRuns.has(id))return;
-    const panel=el('section',undefined,'live-panel'),title=el('h2',project+' · '+agent),output=el('pre',undefined,'live-output');
-    panel.append(title,button('Close',()=>{liveRuns.delete(id);panel.remove();}),output);$('live').append(panel);panel.scrollIntoView({block:'nearest',behavior:'smooth'});
-    liveRuns.set(id,{project,agent,output,loading:false,initial:true});await pollLive(liveRuns.get(id));
+    const panel=el('section',undefined,'live-panel'),title=el('h2',project+' · '+agent),activity=el('div',undefined,'live-activity'),output=el('pre',undefined,'live-output');activity.hidden=true;
+    panel.append(title,button('Close',()=>{liveRuns.delete(id);panel.remove();}),activity,output);$('live').append(panel);panel.scrollIntoView({block:'nearest',behavior:'smooth'});
+    liveRuns.set(id,{project,agent,activity,output,loading:false,initial:true});await pollLive(liveRuns.get(id));
   }
   async function pollLive(run) {
     if(run.loading || !run.output.isConnected)return;run.loading=true;
     try{const result=run.kind==='orch'?{lines:(client.state.log||[]).filter((line,index)=>{const meta=client.state.log_meta?.[index]||{};return meta.project===run.project && meta.hive===run.hive;}).map(line=>['text',line.join(' ')])}:await client.request('live?'+new URLSearchParams({project:run.project,agent:run.agent}));const follow=run.initial || run.output.scrollHeight-run.output.scrollTop-run.output.clientHeight<25;
+      renderLiveActivity(run,result.activity);
       run.output.replaceChildren();for(const [colour,text] of result.lines){run.output.append(el('div',text,colour));}if(!result.lines.length)run.output.append(el('span',t('No live output yet.')));if(follow)run.output.scrollTop=run.output.scrollHeight;run.initial=false;
     }catch(error){if(run.output.isConnected)run.output.textContent=error.message;}finally{run.loading=false;}
   }

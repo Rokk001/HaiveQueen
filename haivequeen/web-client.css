@@ -167,6 +167,11 @@ dialog::backdrop { background: #000b; backdrop-filter: blur(3px); }
 #live:empty { display: none; }
 
 .live-output { height: 320px; overflow: auto; background: #020708; padding: 12px; }
+.live-activity { padding:12px 16px; border-bottom:1px solid #34505a; max-height:360px; overflow:auto; }
+.live-activity h4 { margin:0 0 8px; }
+.live-activity-item { margin:6px 0; }
+.live-activity-item summary { cursor:pointer; overflow-wrap:anywhere; }
+.live-activity-item pre { max-height:220px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
 
 .question textarea { min-height: 100px; }
 

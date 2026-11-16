@@ -192,6 +192,7 @@ Most day-to-day controls are also in the browser. Expand the reference for every
 | [Settings](docs/SETTINGS.md) | Look up machine and project configuration. |
 | [CLI reference](docs/COMMANDS.md) | Find command syntax and arguments. |
 | [Inbox](docs/INBOX.md) | Supply answers and decisions through files. |
+| [Recorded activity](docs/LIVE-ACTIVITY.md) | Inspect recent agent commands and tools alongside milestones. |
 | [Agent profiles](docs/PROFILE.md) | Understand instruction loading and profile separation. |
 | [Agent rules](docs/AGENT-RULES.md) | Read the coordination and verification contract. |
 | [Branch attribution](docs/BRANCH-ATTRIBUTION.md) | Understand worktree assignment and commit auditing. |
