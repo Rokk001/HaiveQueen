@@ -1210,3 +1210,7 @@ label.field > .copy-tools { grid-column:2; padding:0; }
 @media(max-width:700px){.messenger-chat-body{padding:16px;}.messenger-request{padding:0;}}
 
 .questions-messenger{font-family:"Segoe UI",system-ui,sans-serif;}
+
+.owner-action-summary{padding:12px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.owner-action-heading{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;flex:1 1 65%;}
+.owner-action-summary small{font-size:.8rem;}.owner-action-tag{font-size:.85rem;color:#a7bac3;}

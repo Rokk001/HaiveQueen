@@ -1973,7 +1973,22 @@ function mount(document, bootstrap) {
       return;
     }
     let panel=$('job-'+job.id);if(!panel){panel=el('section');panel.id='job-'+job.id;$('live').append(panel);}
-    panel.replaceChildren(el('h2',t(job.title || job.key || 'Owner action')),valueView(job));
+    panel.className='owner-action-summary';
+    const [kind,...parts]=String(job.key||'').split(':'),project=parts.join(':');
+    const label=({'release-promotion':'Release publication',mcp:'Provider setup',benchmark:'Provider benchmark',tools:'Tool installation'})[kind]||'Owner action';
+    const title=t(label)+(project&&kind!=='tools'?' · '+project:'');
+    const status=job.running?t('Running'):job.error?t('Failed'):
+      kind==='release-promotion'?t('Publication requested; confirmation is available in Releases.'):t('Completed');
+    const header=el('div',undefined,'owner-action-heading');header.append(el('strong',title),el('span',status,job.error?'bad':job.running?'warn':'dim'));
+    panel.replaceChildren(header);
+    const stamp=Number(job.ended||job.started);
+    if(Number.isFinite(stamp)&&stamp>0)panel.append(el('small',new Date(stamp*1000).toLocaleString(),'dim'));
+    if(job.running&&job.progress)panel.append(el('p',job.progress));
+    if(job.error)panel.append(button('Error details',()=>detail(title,String(job.error))));
+    if(kind==='release-promotion'){
+      if(job.result?.tag)panel.append(el('span',job.result.tag,'owner-action-tag'));
+      panel.append(button('Releases',()=>selectTab('Releases',project)));
+    }
     if(!job.running)panel.append(button('Close',()=>{jobs.delete(job.id);panel.remove();}));
   }
   async function refreshLists() {

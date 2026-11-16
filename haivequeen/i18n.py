@@ -1058,3 +1058,9 @@ GERMAN['Diagnosis running: %s'] = 'Diagnose l\u00e4uft: %s'
 GERMAN['Integration failed: %d checks red. Further checks running for diagnosis: %d/%s completed.'] = 'Integration fehlgeschlagen: %d Checks rot. Weitere Checks laufen zur Fehlerdiagnose: %d/%s abgeschlossen.'
 GERMAN['Integration place released; diagnostic resources remain reserved.'] = 'Integrationsplatz freigegeben; Diagnose-Ressourcen bleiben reserviert.'
 GERMAN['Integration place retained: %s'] = 'Integrationsplatz bleibt belegt: %s'
+
+GERMAN.update({'Release publication': 'Release-Veröffentlichung',
+               'Provider setup': 'Provider-Einrichtung', 'Provider benchmark': 'Provider-Benchmark',
+               'Tool installation': 'Werkzeuginstallation', 'Error details': 'Fehlerdetails',
+               'Publication requested; confirmation is available in Releases.':
+               'Veröffentlichung angefordert; Bestätigung unter Releases prüfen.'})

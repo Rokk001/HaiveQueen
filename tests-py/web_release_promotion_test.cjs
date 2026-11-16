@@ -23,13 +23,25 @@ const {startUpdateInstall,releaseCardState,startReleasePromotion,releaseJobStatu
  }
  const jobRenderer=source.slice(source.indexOf('  function renderJob('),source.indexOf('  async function refreshLists()'));
  const nodes=new Map(),promotions=new Map();let redraws=0;
- const node=()=>({children:[],append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;},remove(){}});
+ const node=(text='')=>({text,children:[],append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;},remove(){}});
  const live=node();nodes.set('live',live);
- const renderJob=new Function('$','el','t','valueView','button','jobs','releasePromotions','render',"const tab='Releases';"+jobRenderer+'return renderJob;')(id=>nodes.get(id),(tag,text)=>{const n=node();Object.defineProperty(n,'id',{set(id){nodes.set(id,n);}});return n;},x=>x,x=>x,()=>node(),new Map(),promotions,()=>redraws++);
+ const renderJob=new Function('$','el','t','valueView','button','jobs','releasePromotions','render',"const tab='Releases';"+jobRenderer+'return renderJob;')(id=>nodes.get(id),(tag,text)=>{const n=node(text);Object.defineProperty(n,'id',{set(id){nodes.set(id,n);}});return n;},x=>x,()=>assert.fail('Raw job records must not be rendered'),()=>node(),new Map(),promotions,()=>redraws++);
  const old={id:'old',key:'release-promotion:demo',running:false,error:'Old failure',started:1};
  renderJob(old,true);
  assert.equal(promotions.size,0,'Completed history must not become current release feedback');
  assert(nodes.has('job-old'),'Previous error remains available as historical evidence');
+ const text=n=>[n.text||'',...n.children.map(text)].join(' ');
+ const legacy={id:'legacy',key:'release-promotion:demo',running:false,progress:'Requesting release publication...',started:1794777910,ended:1794777918,result:{tag:'v1.2.3',commit:'internal-sha',message:'Old provider message'}};
+ renderJob(legacy,true);
+ const shown=text(nodes.get('job-legacy'));
+ assert(shown.includes('Release publication')&&shown.includes('v1.2.3'));
+ assert(shown.includes('Publication requested; confirmation is available in Releases.'));
+ for(const raw of ['Requesting release publication...','internal-sha','Old provider message','1794777910'])assert(!shown.includes(raw),'Historical card must omit stale progress and internal values');
+ assert.equal(promotions.size,0,'Legacy request must not masquerade as active provider polling');
+ renderJob({id:'tool',key:'tools:install',running:false,progress:'Installing...',result:{secret:'private-path'}},true);
+ assert(text(nodes.get('job-tool')).includes('Completed'));
+ assert(!text(nodes.get('job-tool')).includes('Installing...'));
+ assert(!text(nodes.get('job-old')).includes('Old failure'),'Error payload is only shown on explicit request');
  renderJob({...old,id:'running',running:true,error:'',started:2},true);
  assert.equal(promotions.get('demo').id,'running','Restore running promotion after page reload');
  renderJob({...old,id:'running',started:2,error:'Current failure'});
