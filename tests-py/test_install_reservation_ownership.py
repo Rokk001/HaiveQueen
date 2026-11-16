@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import isolation  # noqa: F401
 
-from haivequeen import db, release_activation, release_staging, selfupdate, version_layout, version_leases
+from haivequeen import db, release_activation, release_staging, selfupdate, updates, version_layout, version_leases
 from test_release_staging import archive, authenticated_fetch
 
 
@@ -101,8 +101,12 @@ class ReservationOwnershipTests(unittest.TestCase):
     def test_worker_carries_real_staging_token_to_activation(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict('os.environ', {'BZZ_DATA_DIR': temp}):
             root = Path(temp, 'install')
-            data = archive([('project/haivequeen/cli.py', 'code')])
-            fetch = authenticated_fetch(data)
+            from release_authority_fixture import authority, package_files, responses
+            files = package_files(Path(__file__).resolve().parent.parent)
+            replies = responses({v: authority(files, v) for v in ('1.0.0', '2.0.0')})
+            def fetch(url):
+                return replies['/' + url.split('/repos/', 1)[1].split('/', 2)[2]]
+            version_layout.install_launcher(root)
             _, old = release_staging.stage_release(root, 'example/project', '1.0.0', fetch, return_token=True)
             version_layout.set_active(root, '1.0.0', installation_token=old)
             stage = release_staging.stage_release
@@ -111,7 +115,7 @@ class ReservationOwnershipTests(unittest.TestCase):
             conn = db.connect(Path(temp, 'test.db'))
             try:
                 with patch.object(release_staging, 'stage_release', side_effect=staging), \
-                     patch.object(release_staging, 'verify_installed', return_value=True):
+                     patch.object(release_staging, '_fetch', side_effect=fetch), patch.object(updates, 'repository', return_value='example/project'):
                     result = selfupdate.run_release_update(conn, root, '2.0.0', jobs=lambda c: [],
                         loop_pid=lambda: 0, start=lambda: True, receipt=lambda *a, **k: True)
                 self.assertEqual(result['result'], 'ok', result)

@@ -20,13 +20,13 @@ async function check(version,target){
  assert.equal(calls[0][0],'updates/install');
  assert.equal(calls[0][1].version,target,'Preserve the original API version');
  assert.equal(calls[0][1].confirmed,true);
- assert.equal(box.children[0].textContent,`installing version ${target} – waiting for running agents`);
+ assert.equal(box.children[0].textContent,'Installing update v0.2.45');
 }
 function checkInstalling(){
  const box=node('');
  const updateState={available:{version:'v0.2.48'},installing:{version:'v0.2.48',after_row:12,since:'2026-01-01T12:00:00'}};
  new Function('$','t','updateState','el','button','act','bootstrap','client',helpers+renderBody+'renderUpdates();')(()=>box,x=>x,updateState,(_,text)=>node(text),(text,click)=>Object.assign(node(text),{click}),()=>{throw Error('Rendering must not install');},{},{});
- assert.deepEqual(box.children.map(x=>x.textContent),['installing version v0.2.48 – waiting for running agents','Check now']);
+ assert.deepEqual(box.children.map(x=>x.textContent),['Installing update v0.2.48','Check now']);
  assert.equal(box.children[1].disabled,true,'Checking stays disabled while installing');
 }
 (async()=>{await check('0.2.44','0.2.45');await check('v0.2.44','v0.2.45');checkInstalling();console.log('Update labels passed');})().catch(e=>{console.error(e);process.exitCode=1;});

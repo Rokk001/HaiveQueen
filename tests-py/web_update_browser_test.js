@@ -2,9 +2,9 @@ window.addEventListener('load', async () => {
   const wait=async fn=>{for(let i=0;i<200;i++){if(fn())return;await new Promise(r=>setTimeout(r,25));}throw Error('Timeout: '+fn);};
   const assert=(v,m)=>{if(!v)throw Error(m);};
   try {
-    await wait(()=>document.querySelector('#update-status button') && document.querySelector('[data-panel="ACTIVE PLANS"]'));
+    await wait(()=>document.querySelector('#update-status button') && document.querySelector('[data-panel="Hives"]'));
     const update=document.querySelector('#update-status');
-    const install=[...update.querySelectorAll('button')].find(b=>b.textContent==='Update');
+    const install=[...update.querySelectorAll('button')].find(b=>b.textContent==='Update to v2');
     assert(install,'release offer missing');
     install.click();await wait(()=>document.querySelector('#confirmation-dialog')?.open);
     document.querySelectorAll('#confirmation-dialog button')[1].click();
@@ -13,9 +13,13 @@ window.addEventListener('load', async () => {
     assert(installActions.some(a=>a.action==='/api/updates/install' && a.data.confirmed===true && a.data.version==='v2'),'confirmed install missing');
     assert(update.textContent.includes('Update waiting'),'waiting label missing');
     assert(update.title.includes('schema change') && update.title.includes('Queen · Q · P') && update.title.includes('Build · B · P'),'waiting tooltip missing reason or jobs');
-    assert(document.querySelector('#version').textContent==='v2','core version missing');
-    assert(document.querySelector('[data-panel="ACTIVE PLANS"]').textContent.includes('v1'),'plan version missing');
-    assert(document.querySelector('[data-panel="QUEENS AND AGENTS"]').textContent.includes('v1'),'build version missing');
+    assert(document.querySelector('#version').textContent==='Running v2','core version missing');
+    assert(document.querySelector('.hq-step-count')?.textContent.includes('Version: v1'),'build version missing');
+    const plan=document.querySelector('[data-panel="Hives"] .hive-tree-plan .row-menu');
+    assert(plan,'plan detail action missing');
+    plan.click();await wait(()=>document.querySelector('.plan-version'));
+    assert(document.querySelector('.plan-version').textContent.includes('v1'),'plan version missing');
+    document.querySelector('#close-detail').click();
     const force=[...update.querySelectorAll('button')].find(b=>b.textContent==='Force update');
     assert(force,'force button missing');
     force.click();await wait(()=>document.querySelector('#confirmation-dialog')?.open);

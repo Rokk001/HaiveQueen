@@ -70,11 +70,9 @@ def _environment(project):
     value = project['project']
     if value['requires-python'] != '>=3.11' or sys.version_info < (3, 11):
         return False
-    if value['dependencies'] != ['tomlkit>=0.13,<1']:
+    if value['dependencies'] != ['tomlkit==0.15.2']:
         return False
-    parts = importlib.metadata.version('tomlkit').split('.')
-    version = tuple(int(p) for p in parts[:2])
-    return (0, 13) <= version < (1, 0)
+    return importlib.metadata.version('tomlkit') == '0.15.2'
 
 
 def prepare(root, repository, fetch=None):

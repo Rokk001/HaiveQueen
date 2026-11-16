@@ -14,6 +14,54 @@ from haivequeen import orchestrator, version_layout, version_leases
 
 
 class DetachedPipelineTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        env = patch.dict(os.environ, {'BZZ_DATA_DIR': temporary.name})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_cancel_waits_for_detached_command_before_releasing_worktree(self):
+        from haivequeen import db, platform
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            marker, result = base / 'pid', base / 'result.json'
+            script = base / 'build.py'
+            script.write_text("import os,time,pathlib; pathlib.Path(%r).write_text(str(os.getpid())); time.sleep(30)" % str(marker))
+            conn = db.connect(base / 'runtime.db')
+            child_identity = None
+            job = orchestrator.Job('cancel-test')
+            job.log_file = str(base / 'build.log')
+            orchestrator.JOBS['test', 'plan'] = job
+            try:
+                orchestrator._start_detached_work(job, {}, 'Build', '"%s" "%s"' % (sys.executable, script), base, None, result)
+                state = {'steps': {'Build': 'running'}, 'job': {'token': job.token, 'pid': job.pid,
+                         'identity': job.identity, 'file': str(result), 'detached': True}}
+                deadline = time.monotonic() + 10
+                while not marker.exists() and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.assertTrue(marker.exists())
+                child_identity = platform.process_identity(int(marker.read_text()))
+                with patch.object(platform, 'kill_process_tree') as kill_supervisor:
+                    self.assertFalse(orchestrator._cancel_pipeline_job(conn, 'test', 'plan', state))
+                    kill_supervisor.assert_not_called()
+                self.assertTrue(Path(str(result) + '.cancel').exists())
+                deadline = time.monotonic() + 10
+                while not orchestrator._cancel_pipeline_job(conn, 'test', 'plan', state) and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.assertNotIn('job', state)
+                self.assertFalse(platform.process_alive(int(marker.read_text())))
+                self.assertEqual(json.loads(result.read_text())['code'], 143)
+            finally:
+                if child_identity and marker.exists() and platform.process_identity(int(marker.read_text())) == child_identity:
+                    platform.kill_process_tree(int(marker.read_text()))
+                if job.process and job.process.poll() is None:
+                    platform.kill_process_tree(job.process.pid)
+                if job.process:
+                    job.process.wait(timeout=10)
+                orchestrator.JOBS.pop(('test', 'plan'), None)
+                conn.close()
+
     def test_running_build_and_deploy_survive_version_activation(self):
         for step in ('Build', 'Deploy'):
             with self.subTest(step=step), tempfile.TemporaryDirectory() as folder:
@@ -102,7 +150,7 @@ class DetachedPipelineTests(unittest.TestCase):
             result = Path(folder) / "result.json"
             orchestrator._write_result(result, "token", 0, "done")
             state = {"job": {"step": "Build", "token": "token", "file": str(result)}}
-            with patch.object(orchestrator, "save_step_log"):
+            with patch.object(orchestrator, "save_step_log"), patch.object(orchestrator, "save"):
                 for _ in range(2):
                     self.assertEqual(orchestrator._harvest(None, SimpleNamespace(name="project"), "plan", state), (0, "done"))
 
@@ -112,7 +160,7 @@ class DetachedPipelineTests(unittest.TestCase):
         with patch.object(orchestrator, "commands", return_value={"Deploy": "deploy"}), \
                 patch.object(orchestrator, "_harvest", return_value=(0, "")), \
                 patch.object(orchestrator, "_save_last") as save_last, \
-                patch.object(orchestrator, "_done", return_value="next"):
+                patch.object(orchestrator, "_done", return_value="next"), patch.object(orchestrator, "save"):
             self.assertEqual(orchestrator._command(None, env, "plan", state, ".", "Deploy", 4096), "next")
         self.assertEqual(state["deployed"], "old")
         self.assertEqual(save_last.call_args.kwargs["deployed"], "old")
@@ -134,7 +182,7 @@ class DetachedPipelineTests(unittest.TestCase):
                 self.assertEqual(json.loads(result.read_text())["code"], 0)
                 orchestrator.JOBS.clear()
                 state = {"job": {"step": step, "token": "token", "file": str(result), "pid": pid}}
-                with patch.object(orchestrator, "save_step_log"):
+                with patch.object(orchestrator, "save_step_log"), patch.object(orchestrator, "save"):
                     self.assertEqual(orchestrator._harvest(None, SimpleNamespace(name="project"), "plan", state)[0], 0)
 
 

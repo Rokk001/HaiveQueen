@@ -29,8 +29,8 @@ class UpdateBrowserTest(unittest.TestCase):
                  'tiles': {}, 'limits': [], 'queue': {}, 'hives': [{'name': 'Plan', 'apiary': 'P',
                  'plan_path': 'plan.md', 'queen': 'Q', 'queen_agent': 'q', 'queen_version': 'v1',
                  'status': 'Running', 'progress': 0, 'done': 0, 'total': 1}],
-                 'bees': [{'kind': 'orchestrator', 'name': 'Build', 'apiary': 'P', 'project': 'P',
-                 'plan_path': 'plan.md', 'hive': 'Plan', 'task': 'Build', 'status': 'running', 'version': 'v1'}]}
+                 'bees': [{'kind': 'orch', 'name': 'Build', 'apiary': 'P', 'project': 'P',
+                 'plan_path': 'plan.md', 'hive': 'Plan', 'task': 'Build', 'status': 'running', 'version': 'v1', 'orch': {'step': 'Build', 'status': 'running', 'version': 'v1', 'n': 3, 'm': 5, 'chain': [['Build', 'running']]}}]}
         script = Path(__file__).with_name('web_update_browser_test.js').read_text(encoding='utf-8')
         class Handler(http.server.BaseHTTPRequestHandler):
             def send(self, value, mime='application/json'):
@@ -56,10 +56,11 @@ class UpdateBrowserTest(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever); thread.start()
         try:
             with tempfile.TemporaryDirectory() as profile:
-                cmd = [browser, '--headless', '--disable-gpu', '--no-first-run', '--disable-extensions',
+                cmd = [browser, '--headless', '--no-sandbox', '--disable-gpu', '--no-first-run', '--disable-extensions',
                        '--disable-background-networking', '--user-data-dir='+profile, '--dump-dom',
                        '--virtual-time-budget=10000', 'http://127.0.0.1:'+str(server.server_port)]
                 result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=45,
+                                        env=__import__('test_web_ui').BrowserTests.browser_environment(profile),
                                         **({'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}))
                 self.assertIn('data-test-result="passed"', result.stdout, result.stdout.split('BROWSER TEST:')[-1][-1500:])
         finally:

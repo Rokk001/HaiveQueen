@@ -20,7 +20,7 @@ tables, the last diagnosis validation and milestone files, and retained implemen
 reports identifiable by commits `2d70420` and `fa396a9`. The table timestamps are
 reported as stored; they are not independently normalized to UTC.
 
-* For this plan on that date: 118 persisted agent rows: 43 Queen, 64 fix, 3 bee,
+* For this plan on that date: 118 persisted agent rows: 43 Queen, 64 fix, 3 package Agent,
   8 verify. The `fix` phase includes diagnoses; these are not 64 implemented fixes.
   Embedded Agents may instead be accounted through their parent: these counts are
   not an exhaustive count of provider-native subagents or unique problems.

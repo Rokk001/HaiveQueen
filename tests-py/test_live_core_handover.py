@@ -63,7 +63,7 @@ with patch.object(loop, 'run_round', side_effect=round_), patch.object(loop, 'da
      patch.object(bees, 'foreign_plan_branch', return_value=False), \
      patch.object(bees, 'worktree_conflict', return_value=None), \
      patch.object(bees, 'prepare_queen_worktree', return_value=os.environ['TEST_REPO']):
-    loop.run_loop(conn, {'providers': [{'name':'test', 'protocol':'claude', 'command':'test', 'args':[], 'slots':4, 'use':'preferred', 'capabilities':['Queen'], 'classes':{'medium':{'model':'test','effort':'medium'}}}], 'projects': [], 'roundMinutes': 0.01}, rounds=1)
+    loop.run_loop(conn, {'providers': [{'name':'test', 'protocol':'claude', 'command':'test', 'args':[], 'slots':4, 'use':'preferred', 'capabilities':['Queen'], 'classes':{'medium':{'model':'test','effort':'medium'},'heavy':{'model':'test','effort':'high'}}}], 'projects': [], 'roundMinutes': 0.01}, rounds=1)
 conn.close()
 (base / (version + '-finished')).touch()
 ''', encoding='utf-8')
@@ -106,7 +106,7 @@ conn.close()
             command_file.write_text('#!/bin/sh\nexec "%s" "%s" "$@"\n' % (sys.executable, fake), encoding='utf-8')
             command_file.chmod(0o755)
         config_file = self.base / 'cfg' / 'config.toml'
-        config_file.write_text("slots=4\n[[providers]]\nname='test'\nprotocol='claude'\ncommand='%s'\nargs=[]\nslots=4\ncapabilities=['Queen']\n[providers.classes.medium]\nmodel='test'\neffort='medium'\n" % command_file.as_posix(), encoding='utf-8')
+        config_file.write_text("slots=4\n[[providers]]\nname='test'\nprotocol='claude'\ncommand='%s'\nargs=[]\nslots=4\ncapabilities=['Queen']\n[providers.classes.heavy]\nmodel='test'\neffort='high'\n[providers.classes.medium]\nmodel='test'\neffort='medium'\n" % command_file.as_posix(), encoding='utf-8')
         env = dict(os.environ, TEST_BASE=str(self.base), TEST_REPO=str(self.repo))
         env.pop('BZZ_TEST_NOSTART', None)
         jobs = [subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], env=env) for _ in range(2)]

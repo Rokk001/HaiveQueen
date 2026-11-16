@@ -436,7 +436,7 @@ window.addEventListener('load', async () => {
     document.getElementById('close-detail').click();
 
     await click('Check now');await wait(()=>buttons('Update to v9.0.0').length);await click('Update to v9.0.0');
-    await wait(()=>document.getElementById('update-status').textContent.includes('installing version'));
+    await wait(()=>document.getElementById('update-status').textContent.includes('Installing update'));
     assert(buttons('Update to v9.0.0').length===0,'Accepted update must not revert to an install offer');
     assert(buttons('Check now')[0].disabled,'Update check must remain disabled while installing');
 

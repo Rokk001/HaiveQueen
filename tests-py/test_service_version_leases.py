@@ -8,6 +8,13 @@ from haivequeen import config, tray, version_leases, web_service
 
 
 class ServiceLeaseTests(unittest.TestCase):
+    def test_posix_tray_command_uses_a_session_without_windows_flags(self):
+        with patch.object(tray.osplat, 'is_windows', return_value=False), \
+             patch.object(version_leases, 'launch') as launch:
+            tray.run_command(['start'])
+        self.assertTrue(launch.call_args.kwargs['start_new_session'])
+        self.assertNotIn('creationflags', launch.call_args.kwargs)
+
     def test_tray_command_and_web_server_reserve_version_before_spawn(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
@@ -21,7 +28,9 @@ class ServiceLeaseTests(unittest.TestCase):
                 stdout = io.BytesIO(b'{"ok": true}\n')
                 def wait(self, timeout=None): return 0
             def spawn(*args, **kwargs):
-                self.assertEqual(version_leases.collect(root), [])
+                leases = version_leases._load(root)
+                self.assertTrue(any(r.get('version') == 'old' and r.get('pid') is None for r in leases.values()))
+                self.assertTrue(old.is_dir())
                 return Process()
             with patch.object(config, 'config_dir', return_value=base / 'data'), \
                  patch.object(config, 'data_dir', return_value=base / 'data'), \

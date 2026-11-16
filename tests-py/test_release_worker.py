@@ -39,21 +39,14 @@ class ReleaseWorkerTests(unittest.TestCase):
     def active(self):
         return (self.root / 'active-version').read_text(encoding='utf-8').strip()
 
-    def test_unproven_positive_release_waits_for_live_job(self):
+    def test_unproven_positive_release_defers_without_touching_jobs(self):
         self.metadata(True)
-        live = [True]
-        def jobs(conn):
-            return [{'kind': 'Agent', 'name': 'child'}] if live[0] else []
-        def sleep(_):
-            self.assertEqual(self.active(), '1.0.0')
-            self.assertTrue(loop.stop_flag().exists())
-            status = json.loads(selfupdate.release_status_path().read_text(encoding='utf-8'))
-            self.assertIn('unknown', status['reason'])
-            live[0] = False
         with mock.patch('haivequeen.release_staging.verify_installed', return_value=True):
-            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', jobs=jobs, sleep=sleep,
-                loop_pid=lambda: 42 if live[0] else 0, start=lambda: True, receipt=lambda *a, **k: True)
-        self.assertEqual(result['result'], 'ok')
+            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0',
+                jobs=lambda c: self.fail('unproven release must not drain jobs'),
+                start=lambda: self.fail('unproven release must not start'))
+        self.assertEqual(result['result'], 'deferred')
+        self.assertEqual(self.active(), '1.0.0')
 
     def test_unverified_or_changed_release_never_activates(self):
         self.metadata(True)
@@ -62,7 +55,7 @@ class ReleaseWorkerTests(unittest.TestCase):
                 activate = mock.Mock()
                 result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', jobs=lambda c: [],
                     loop_pid=lambda: 0, start=lambda: True, activate=activate)
-                self.assertEqual(result['result'], 'failed')
+                self.assertEqual(result['result'], 'failed' if checks == [False] else 'deferred')
                 self.assertEqual(self.active(), '1.0.0')
                 activate.assert_not_called()
 
@@ -120,26 +113,21 @@ class ReleaseWorkerTests(unittest.TestCase):
         self.assertIn('Unfinished work', output.getvalue())
         self.assertTrue(selfupdate.release_force_path().exists())
 
-    @unittest.expectedFailure  # No production proof provider or admission exclusion yet.
     def test_compatible_switch_does_not_drain_or_wait_for_jobs(self):
-        # This controlled provider stands for all required evidence, including
-        # process/environment provenance, shared state, and launch exclusion.
-        # Production has no provider capable of establishing these facts yet.
-        def proven_compatible(_target):
-            return {'compatible': True, 'reason': ''}
+        # Both installed versions carry authenticated, compatible package trees.
         def receipt(conn, target, began, sleep, poll, timeout, loop_pid):
             self.assertEqual(self.active(), '2.0.0')
             self.assertFalse(loop.stop_flag().exists())
             self.assertFalse(selfupdate.lock_path().exists())
             return True
-        with self.verified_release(compatible=True) as stage, mock.patch.object(release_compat, 'compatibility', side_effect=proven_compatible):
+        with self.verified_release(compatible=True) as stage:
             result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', stage=stage,
                 jobs=lambda c: self.fail('must not wait'), loop_pid=lambda: 42,
                 receipt=receipt, start=lambda: self.fail('old core hands over'))
         self.assertEqual(result['result'], 'ok')
         self.assertEqual(self.active(), '2.0.0')
 
-    def test_verified_staged_release_drains_with_unknown_reason(self):
+    def test_verified_staged_release_with_unknown_consumers_defers(self):
         # A release body claiming a database change is not evidence of it.
         fixture = test_release_provenance.ProvenanceTests()
         fixture.setUp()
@@ -168,27 +156,25 @@ class ReleaseWorkerTests(unittest.TestCase):
                 jobs=lambda conn: [{'kind': 'Queen', 'name': 'Q'}] if live[0] else [],
                 sleep=sleep, loop_pid=lambda: 42 if live[0] else 0,
                 start=lambda: True, receipt=lambda *a, **k: True)
-        self.assertEqual(result['result'], 'ok')
-        self.assertEqual(observed[0]['reason'], release_compat.UNKNOWN_REASON)
-        self.assertEqual(observed[0]['jobs'][0]['name'], 'Q')
-        self.assertEqual(self.active(), '2.0.0')
+        self.assertEqual(result['result'], 'deferred')
+        self.assertEqual(observed, [])
+        self.assertEqual(self.active(), '1.0.0')
 
     @contextlib.contextmanager
     def verified_release(self, compatible=False):
-        fixture = test_release_provenance.ProvenanceTests()
-        fixture.setUp()
-        original_fetch = fixture.fetch
-        def fetch(url):
-            if '/releases/' in url:
-                return json.dumps({'tag_name': 'v2.0.0', 'body': json.dumps({
-                    'repository': 'example/project', 'version': '2.0.0',
-                    'commit': fixture.commit, 'compatible_with_older': compatible,
-                    'reason': '' if compatible else 'database change', 'evidence': 'assertion'})}).encode()
-            return original_fetch(url)
+        from release_authority_fixture import authority, package_files, responses, database_break
         import shutil
-        shutil.rmtree(self.target)
-        def stage(root, repository, version):
-            return release_staging.stage_release(root, repository, version, fetch)
+        files = package_files(Path(__file__).resolve().parent.parent)
+        replies = responses({'1.0.0': authority(files, '1.0.0'),
+                             '2.0.0': authority(files if compatible else database_break(files), '2.0.0')})
+        def fetch(url):
+            return replies['/' + url.split('/repos/', 1)[1].split('/', 2)[2]]
+        shutil.rmtree(self.root / 'versions')
+        release_staging.stage_release(self.root, 'example/project', '1.0.0', fetch)
+        version_layout.install_launcher(self.root)
+        version_layout.set_active(self.root, '1.0.0')
+        def stage(root, repository, version, **kwargs):
+            return release_staging.stage_release(root, repository, version, fetch, **kwargs)
         with mock.patch.object(updates, 'repository', return_value='example/project'), \
              mock.patch.object(release_staging, '_fetch', side_effect=fetch):
             yield stage
@@ -208,7 +194,7 @@ class ReleaseWorkerTests(unittest.TestCase):
             result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', stage=stage, jobs=jobs, sleep=sleep,
                         loop_pid=lambda: 42 if live[0] else 0, start=lambda: True, receipt=lambda *a, **k: True)
         self.assertEqual(result['result'], 'ok')
-        self.assertEqual(observed[0]['reason'], release_compat.UNKNOWN_REASON)
+        self.assertIn('providers_usage.actions', observed[0]['reason'])
         self.assertEqual(observed[0]['jobs'][0]['name'], 'Q')
 
     def test_force_requires_request_and_stops_before_activation(self):
@@ -259,7 +245,7 @@ class ReleaseWorkerTests(unittest.TestCase):
             with self.verified_release() as stage, \
                  mock.patch.object(selfupdate, 'file_fault_rollback') as fault, \
                  mock.patch.object(selfupdate, 'wait_successor_round', side_effect=receipt), \
-                 mock.patch.object(selfupdate, 'run_command', return_value=(0, '')):
+                 mock.patch.object(selfupdate, 'start_release_core', return_value=True):
                 stage(self.root, 'example/project', '2.0.0')
                 result = selfupdate.run_update(self.conn, live=self.root / 'versions' / '1.0.0', version='2.0.0',
                     poll=.01, round_timeout=3, loop_pid=pid, sleep=time.sleep)
@@ -291,8 +277,9 @@ class ReleaseWorkerTests(unittest.TestCase):
         self.metadata(True)
         def fail_start():
             raise RuntimeError('restart unavailable')
-        result = selfupdate.run_release_update(self.conn, self.root, '2.0.0',
-                  loop_pid=lambda: 0, start=fail_start)
+        with self.verified_release() as stage:
+            result = selfupdate.run_release_update(self.conn, self.root, '2.0.0', stage=stage,
+                      loop_pid=lambda: 0, start=fail_start)
         self.assertEqual(result['result'], 'failed')
         self.assertIn('restart unavailable', result['note'])
         self.assertEqual(self.active(), '1.0.0')

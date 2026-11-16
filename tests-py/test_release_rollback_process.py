@@ -12,6 +12,20 @@ from haivequeen import loop, platform, runtime, scheduler, selfupdate, version_l
 
 
 class ReleaseRollbackProcessTest(RoundCase):
+    def setUp(self):
+        super().setUp()
+        # These process tests isolate core recovery, not archive authentication.
+        # Authentication and compatibility use real fixtures in the public
+        # release lifecycle and provenance tests.
+        for name, value in (
+            ('haivequeen.release_staging.verify_installed', True),
+            ('haivequeen.release_contract.prepare', {'verified': 'fixture'}),
+            ('haivequeen.release_contract.assess', {'known': True, 'compatible': True, 'reason': '', 'evidence': {}}),
+        ):
+            override = patch(name, return_value=value)
+            override.start()
+            self.addCleanup(override.stop)
+
     def test_real_launcher_recovers_old_core_after_missed_round(self):
         root = self.base / 'install'
         source = Path(__file__).resolve().parent.parent

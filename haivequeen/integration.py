@@ -226,7 +226,7 @@ def _release_compile_slot(token, poll):
 
 
 # Run the compile command and watch its progress.
-def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, label="compile check", on_start=None, log_file=None):
+def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, label="compile check", on_start=None, log_file=None, cancelled=None):
     """Run `command` in `cwd` until it ends; returns (exit code, output text). The check ends red (124) after max_seconds of running and red (125,
     "stalled") when for stall_seconds neither a new output line appeared nor the CPU time of its process tree grew. `env` adds environment variables,
     `label` names the command in the messages and `on_start(pid)` is called once the process runs (the Orchestrator keeps it to end the command)."""
@@ -237,10 +237,10 @@ def _watch_compile(command, cwd, stall_seconds, max_seconds, poll, env=None, lab
                   osplat.data_dir() / 'command-completions' / (uuid.uuid4().hex + '.exit'))
     completion.parent.mkdir(parents=True, exist_ok=True)
     return _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll,
-                              completion, env, label, on_start, log_file)
+                              completion, env, label, on_start, log_file, cancelled)
 
 
-def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completion, env, label, on_start, log_file=None):
+def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completion, env, label, on_start, log_file=None, cancelled=None):
     """Watch a launcher whose completion record distinguishes an exit from an interrupted run."""
     from . import action_logs
     import collections
@@ -287,7 +287,9 @@ def _watch_compile_run(command, cwd, stall_seconds, max_seconds, poll, completio
             cpu = proctree.tree_cpu_seconds(proc.pid)
             if state["lines"] != seen_lines or abs(cpu - seen_cpu) > 0.001:
                 seen_lines, seen_cpu, last_progress = state["lines"], cpu, now
-            if now - started > max_seconds:
+            if cancelled and cancelled():
+                ended = (143, "command cancelled by its supervisor")
+            elif now - started > max_seconds:
                 ended = (124, "the %s ran longer than %g minutes (compileMaxMinutes)" % (label, max_seconds / 60.0))
             elif now - last_progress > stall_seconds:
                 ended = (125, "stalled: the %s made no output and used no CPU for %g minutes (compileStallMinutes)" % (label, stall_seconds / 60.0))

@@ -67,7 +67,7 @@ class VerifiedCompatibilityTests(unittest.TestCase):
         self.assertFalse(self.assess()['compatible'])
 
     def test_changed_dependency_contract_is_unknown(self):
-        self.target['pyproject.toml'] = self.target['pyproject.toml'].replace(b'tomlkit>=0.13,<1', b'tomlkit>=2,<3')
+        self.target['pyproject.toml'] = self.target['pyproject.toml'].replace(b'tomlkit==0.15.2', b'tomlkit>=2,<3')
         self.install()
         self.assertFalse(self.assess()['compatible'])
 
@@ -139,3 +139,16 @@ class VerifiedCompatibilityTests(unittest.TestCase):
         self.target['schema.sql'] = self.old['schema.sql']
         self.install()
         self.assertFalse(self.assess()['known'])
+
+
+class DependencyEnvironmentTests(unittest.TestCase):
+    def test_distributed_pin_matches_installed_dependency(self):
+        import tomllib
+        from unittest.mock import patch
+        from haivequeen import release_contract
+        project = tomllib.loads((Path(__file__).resolve().parent.parent / 'pyproject.toml').read_text(encoding='utf-8'))
+        with patch.object(release_contract.importlib.metadata, 'version', return_value='0.15.2'):
+            self.assertTrue(release_contract._environment(project))
+        for version in ('0.15.1', '0.15.3', '1.0.0'):
+            with self.subTest(version=version), patch.object(release_contract.importlib.metadata, 'version', return_value=version):
+                self.assertFalse(release_contract._environment(project))

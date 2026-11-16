@@ -44,13 +44,13 @@ class BuildJobsTest(RoundCase):
         env.settings['deployCommand'] = 'unused-test-command'
         state = {'steps': {}}
         observed = []
-        def work(settings, job, step, command, folder, extra, result):
+        def work(job, settings, step, command, folder, extra, result, gated=False):
             observed.append((state['job']['buildJobs'], state['job']['buildParallel'], extra['BUILD_JOBS']))
             job.started.set()
         self.addCleanup(orchestrator.JOBS.pop, (env.name, REL), None)
         with mock.patch.object(orchestrator.integration, 'head_commit', return_value='head'), \
              mock.patch.object(orchestrator, '_start_log', return_value=str(self.base / 'deploy.log')), \
-             mock.patch.object(orchestrator, '_work', side_effect=work), \
+             mock.patch.object(orchestrator, '_start_detached_work', side_effect=work), \
              mock.patch.object(orchestrator, '_harvest', return_value=None), \
              mock.patch.object(orchestrator, '_async', return_value=False), \
              mock.patch.object(bj, 'running_builds', return_value=[]), \

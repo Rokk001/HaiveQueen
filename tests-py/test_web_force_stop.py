@@ -218,16 +218,16 @@ class ForceStopTests(RoundCase):
         for step in ('Build', 'Deploy'):
             with self.subTest(step=step):
                 finished = threading.Event()
-                def watch(*args, on_start, **kwargs):
-                    on_start(910007)
-                    finished.wait(5)
-                    return 0, ''
+                def watch(job, *args, **kwargs):
+                    job.record_pid(910007)
                 env = SimpleNamespace(name='testproj', conn=self.conn, workspace=self.repo,
                                       settings={'buildCommand': 'dummy', 'deployCommand': 'dummy'})
                 state = {'steps': {}}
                 try:
-                    with mock.patch.object(orchestrator, 'ASYNC', True), mock.patch.object(orchestrator, '_log'), mock.patch.object(orchestrator, '_harvest', return_value=None), mock.patch.object(integration, 'head_commit', return_value='abc1234'), mock.patch.object(integration, '_watch_compile', side_effect=watch):
+                    with mock.patch.object(orchestrator, 'ASYNC', True), mock.patch.object(orchestrator, '_log'), mock.patch.object(orchestrator, '_harvest', return_value=None), mock.patch.object(integration, 'head_commit', return_value='abc1234'), mock.patch.object(orchestrator, '_start_detached_work', side_effect=watch):
                         orchestrator._command(self.conn, env, REL, state, self.wt, step, 8192)
+                        state['job']['detached'] = False
+                        orchestrator.save(self.conn, 'testproj', REL, state)
                         stored = orchestrator.load(self.conn, 'testproj', REL)
                         self.assertEqual(stored['job']['pid'], 910007)
                         self.assertEqual(stored['job']['identity'], 'fixture-process')

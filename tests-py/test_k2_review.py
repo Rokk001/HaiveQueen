@@ -17,6 +17,12 @@ real_thread_start = threading.Thread.start
 
 
 class CoreAccountingTests(DetachedCompileCase):
+    def setUp(self):
+        super().setUp()
+        env = mock.patch.dict(os.environ, self.env)
+        env.start()
+        self.addCleanup(env.stop)
+
     def test_build_and_compile_acquisitions_share_one_atomic_reservation(self):
         for kind in ('agent', 'integration', 'orchestrator'):
             with self.subTest(kind=kind):
@@ -57,8 +63,8 @@ class CoreAccountingTests(DetachedCompileCase):
                      mock.patch.object(orchestrator, '_harvest', return_value=None), \
                      mock.patch.object(orchestrator, '_async', return_value=True), \
                      mock.patch.object(orchestrator, '_result_file', return_value=self.base / 'result'), \
-                     mock.patch.object(orchestrator.threading.Thread, 'start', autospec=True,
-                                       side_effect=lambda thread: orchestrator.JOBS[('project', 'plan')].started.set()) as start:
+                     mock.patch.object(orchestrator, '_start_detached_work',
+                                       side_effect=lambda *a, **kw: orchestrator.JOBS[('project', 'plan')].started.set()) as start:
                     # Keep the real Thread.start for the competing acquisition.
                     thread = threading.Thread(target=acquire_check)
                     real_thread_start(thread)
@@ -169,7 +175,7 @@ class CoreAccountingTests(DetachedCompileCase):
              mock.patch.object(orchestrator, '_harvest', return_value=None), \
              mock.patch.object(orchestrator, '_async', return_value=True), \
              mock.patch.object(orchestrator, '_result_file', return_value=self.base / 'result'), \
-             mock.patch.object(orchestrator.threading.Thread, 'start', side_effect=lambda: (
+             mock.patch.object(orchestrator, '_start_detached_work', side_effect=lambda *args, **kwargs: (
                  self.assertEqual(buildjobs.allocated_cores(buildjobs.running_builds(self.conn)), 6),
                  orchestrator.JOBS[('project', 'plan')].started.set())):
             self.addCleanup(orchestrator.JOBS.pop, ('project', 'plan'), None)

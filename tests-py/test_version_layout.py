@@ -80,10 +80,10 @@ class TestVersionLayout(unittest.TestCase):
                 "import pathlib, sys, time\n"
                 "pathlib.Path(sys.argv[1]).touch()\n"
                 "while not pathlib.Path(sys.argv[2]).exists(): time.sleep(.02)\n")
-            layout.install_version(root, 'old', source)
-            layout.install_version(root, 'new', source)
+            _, old_token = layout.install_version(root, 'old', source, return_token=True)
+            _, new_token = layout.install_version(root, 'new', source, return_token=True)
             layout.install_launcher(root)
-            layout.set_active(root, 'old')
+            layout.set_active(root, 'old', installation_token=old_token)
             started, finish = base / 'started', base / 'finish'
             process = subprocess.Popen([sys.executable, '-I', str(root / 'launcher.py'), str(started), str(finish)])
             try:
@@ -91,7 +91,7 @@ class TestVersionLayout(unittest.TestCase):
                 while not started.exists() and time.monotonic() < deadline:
                     time.sleep(.02)
                 self.assertTrue(started.exists())
-                layout.set_active(root, 'new')
+                layout.set_active(root, 'new', installation_token=new_token)
                 with patch.object(version_leases.process_scan, 'scan', return_value=False):
                     self.assertEqual(version_leases.collect(root), [])
                 self.assertTrue((root / 'versions' / 'old').is_dir())

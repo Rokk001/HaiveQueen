@@ -104,7 +104,8 @@ class ReleaseCliProcessTest(RoundCase):
         process = subprocess.Popen(['node', str(driver), browser, status['url']+'/login', str(profile), reason],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True)
         try:
-            self.assertEqual(read_line(process), 'CANCELLED')
+            milestone = read_line(process)
+            self.assertEqual(milestone, 'CANCELLED', (self.base / 'browser-driver.log').read_text(encoding='utf-8')[-6000:])
             self.assertTrue(all(job.poll() is None for job in jobs))
             self.assertTrue(all(job.process.poll() is None for job, _, _, _ in detached))
             process.stdin.write('continue\n'); process.stdin.flush()
@@ -208,7 +209,7 @@ class ReleaseCliProcessTest(RoundCase):
             (self.base / 'cfg' / 'config.toml').write_text(
                 "roundMinutes=0.01\nslots=4\nramReserveMb=0\n[web]\nport=0\n"
                 "[[providers]]\nname='claude'\nprotocol='claude'\ncommand='%s'\nargs=[]\nslots=4\n"
-                "capabilities=['Coding','Queen']\n[providers.classes.medium]\nmodel='test'\neffort='medium'\n"
+                "capabilities=['Coding','Queen']\n[providers.classes.medium]\nmodel='test'\neffort='medium'\n[providers.classes.heavy]\nmodel='test'\neffort='high'\n"
                 % command.as_posix(), encoding='utf-8')
             os.environ['TEST_LIVE_BASE'] = str(self.base)
             self.addCleanup(os.environ.pop, 'TEST_LIVE_BASE', None)
@@ -245,6 +246,7 @@ class ReleaseCliProcessTest(RoundCase):
                 proc = subprocess.Popen([sys.executable, '-c', code, str(self.base / 'finish-agents')], env=env)
                 jobs.append(proc)
                 db.add_agent(self.conn, 'testproj', name=phase, phase=phase, status='running', pid=proc.pid)
+                runtime.upsert_agent(self.conn, 'testproj', phase, {'processIdentity': platform.process_identity(proc.pid)})
             if public:
                 task = self.base / 'hold_work.py'
                 task.write_text('from pathlib import Path\nimport sys,time\n'
@@ -270,7 +272,7 @@ class ReleaseCliProcessTest(RoundCase):
                         orchestrator.save(self.conn, 'testproj', plan,
                                           {'phase': 'pipeline', 'step': step, 'placed': True,
                                            'ran': [], 'steps': {step: 'running'},
-                                           'job': {'step': step, 'token': job.token, 'pid': job.pid,
+                                           'job': {'step': step, 'token': job.token, 'pid': job.pid, 'identity': job.identity, 'detached': True,
                                                    'file': str(result), 'head': 'old-revision'}})
                 deadline = time.monotonic() + 20
                 while not all(started.exists() for _, started, _, _ in detached) and time.monotonic() < deadline:
@@ -322,7 +324,7 @@ class ReleaseCliProcessTest(RoundCase):
                         step = 'Build' if 'build' in job.token else 'Deploy'
                         orchestrator.save(self.conn, 'testproj', 'force-' + step,
                                           {'phase': 'pipeline', 'steps': {step: 'running'},
-                                           'job': {'step': step, 'pid': job.pid, 'file': str(result)}})
+                                           'job': {'step': step, 'pid': job.pid, 'identity': job.identity, 'detached': True, 'file': str(result)}})
                 updates.save_state({'available': {'version': '2.0.0', 'url': 'https://example.invalid/release'}})
                 if web == 'browser':
                     self._browser_force(browser, jobs, detached, reason)

@@ -104,7 +104,7 @@ def run_command(args):
     cli = str(Path(__file__).with_name('cli.py'))
     version_leases.launch(Path(__file__).resolve().parent.parent, subprocess.Popen, [executable, cli] + args, stdin=subprocess.DEVNULL,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS)
+                     **({'creationflags': subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS} if osplat.is_windows() else {'start_new_session': True}))
 
 
 def confirm():
@@ -132,7 +132,7 @@ def ensure_started():
         process = version_leases.launch(Path(__file__).resolve().parent.parent, subprocess.Popen, [osplat.python_executable(), '-m', 'haivequeen.tray'],
                                    cwd=str(Path(__file__).resolve().parent.parent),
                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS)
+                                   **({'creationflags': subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS} if osplat.is_windows() else {'start_new_session': True}))
     except OSError:
         return
     threading.Thread(target=process.wait, daemon=True).start()
@@ -294,7 +294,7 @@ def start_active_tray():
                               [osplat.python_executable(), '-m', 'haivequeen.tray'],
                               cwd=str(target), stdin=subprocess.DEVNULL,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                              creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS)
+                              **({'creationflags': subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS} if osplat.is_windows() else {'start_new_session': True}))
     except OSError:
         pass
 

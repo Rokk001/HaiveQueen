@@ -225,35 +225,41 @@ def match_sub(queen, name):
 
 
 # Describe one Hive for the active-hives table.
-def queen_version(queen):
+def agent_version(queen):
     """Identify the runner by both PID and birth identity in the shared leases."""
     if not queen or not queen.get('pid') or not queen.get('processIdentity'):
-        return '–'
+        return ''
     folder = Path(__file__).resolve().parent.parent
     if folder.parent.name != 'versions':
-        return '–'
+        return ''
     try:
         from . import version_leases
         matches = {r['version'] for r in version_leases._load(folder.parent.parent).values()
                    if r.get('pid') == queen['pid'] and r.get('identity') == queen['processIdentity'] and r.get('version')}
-        return next(iter(matches)) if len(matches) == 1 else '–'
+        return next(iter(matches)) if len(matches) == 1 else ''
     except (OSError, ValueError, KeyError, TypeError):
-        return '–'
+        return ''
+
+
+def queen_version(queen):
+    return agent_version(queen) or '–'
+
+
+def path_version(path):
+    """Read a job's recorded version path, including jobs from an older install."""
+    if not path:
+        return ''
+    folder = Path(path).resolve()
+    if folder.parent.name != 'versions':
+        return ''
+    try:
+        return (folder / '.haivequeen-release-version').read_text(encoding='utf-8').strip() or folder.name
+    except OSError:
+        return folder.name if folder.is_dir() else ''
 
 
 def job_version(state):
-    """Read a running job's own version, never the current core's version."""
-    path = (state.get('job') or {}).get('version_path')
-    if not path or str(state.get('step', '')).lower() not in ('build', 'deploy'):
-        return '–'
-    try:
-        folder = Path(path).resolve()
-        root = Path(__file__).resolve().parent.parent.parent
-        if folder.parent != root or root.name != 'versions':
-            return '–'
-        return (folder / '.haivequeen-release-version').read_text(encoding='utf-8').strip() or folder.name
-    except OSError:
-        return folder.name if folder.is_dir() else '–'
+    return (path_version((state.get('job') or {}).get('version_path')) or '–') if str(state.get('step', '')).lower() in ('build', 'deploy') else '–'
 
 
 def hive_row(hive, agents, packages, now, assigned=None, completed=None, ctx_limit=None, agents_all=None, implemented=None, paused=None, rejected=None, waiting=None, embedded=None, plan_rejected=None, orch=None) -> dict:

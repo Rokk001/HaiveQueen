@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from haivequeen import process_scan
@@ -50,11 +51,11 @@ class WindowsUnmatchedProcessTests(unittest.TestCase):
         inspector = self.inspector()
         inspector.pids = lambda: [42]
         with mock.patch.object(process_scan, '_WindowsProcesses', return_value=inspector):
-            self.assertIsNone(process_scan.scan_windows(r'C:\target'))
-        inspector = self.inspector(image=r'C:\target\python.exe')
+            self.assertIsNone(process_scan.scan_windows(Path('target').resolve()))
+        inspector = self.inspector(image=str(Path('target/python.exe').resolve()))
         inspector.pids = lambda: [42]
         with mock.patch.object(process_scan, '_WindowsProcesses', return_value=inspector):
-            self.assertIs(process_scan.scan_windows(r'C:\target'), True)
+            self.assertIs(process_scan.scan_windows(Path('target').resolve()), True)
 
 
 if __name__ == '__main__':

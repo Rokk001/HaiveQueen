@@ -7,7 +7,7 @@ integration place released, worktree cleanup). A step whose command is empty is 
 plan's worktree; after its fix the pipeline starts again at step 1. The state of a plan is stored in the kv table (key orch:<plan>), so the pipeline
 goes on after a pause, a fix, an owner answer and a restart of HaiveQueen.
 
-Check runs in a detached supervisor and publishes its result in the database. Merge, Build and Deploy run in threads and store their results in files. Push and the fix agent start run in the round itself.
+Check runs in a detached supervisor and publishes its result in the database. Merge runs in a thread; Build and Deploy run in detached supervisors and store their results in files. Push and the fix agent start run in the round itself.
 
 Each step follows its Local or Git provider setting. Provider Merge pushes the plan branch and waits for an external PR merge; it never merges or enables auto-merge.
 Provider command steps poll the exact commit's pipeline through the adapter. Their state survives restarts, and a failed pipeline enters the same fix-agent flow as a local failure.
@@ -803,7 +803,9 @@ def _work(env_settings, job, step, command, folder, extra_env, result_file):
         else:
             try:
                 code, output = integration._watch_compile(command, str(folder), stall, longest, poll, env=extra_env, label=step.lower() + " command",
-                                                          on_start=job.record_pid, log_file=job.log_file)
+                                                          on_start=job.record_pid, log_file=job.log_file,
+                                                          **({"cancelled": lambda: Path(str(result_file) + ".cancel").exists()}
+                                                             if getattr(job, "detached", False) else {}))
             except OSError as exc:
                 code, output = 127, "the %s command could not start: %s" % (step, exc)
     finally:
@@ -836,6 +838,7 @@ def _detached_work(request_file):
             time.sleep(0.05)
         Path(gate).unlink(missing_ok=True)
     j = Job(request["token"])
+    j.detached = True
     j.log_file = request.get("log_file")
     try:
         _work(request["settings"], j, request["step"], request["command"],
@@ -944,7 +947,7 @@ def _command(conn, env, plan, state, folder, step, free_mb):
         else:
             try:
                 _start_detached_work(j, env.settings, step, command, folder, extra, result_file, gated=True)
-                state["job"].update(pid=j.pid, identity=j.identity)
+                state["job"].update(pid=j.pid, identity=j.identity, detached=True)
                 state["job"]["version_path"] = str(Path(__file__).resolve().parent.parent)
                 save(conn, env.name, plan, state)
                 Path(str(result_file) + ".go").touch()
@@ -1984,7 +1987,12 @@ def _cancel_pipeline_job(conn, project, plan, state, stop=None):
     elif job:
         pid = record.get("pid")   # retain the last identity while its worker unwinds
     identity = record.get("identity")
-    if pid and record.get("cancel_pid") != pid:
+    if record.get("detached") and agent_process.identity_matches(pid, identity):
+        # The command has its own process group. Let its supervisor stop and
+        # reap that group before publishing completion; killing only the
+        # supervisor would orphan the command and release its worktree early.
+        Path(str(record["file"]) + ".cancel").touch()
+    elif pid and record.get("cancel_pid") != pid:
         if agent_process.identity_matches(pid, identity):
             stop(pid)
             record["cancel_pid"] = pid
