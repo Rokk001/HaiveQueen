@@ -34,6 +34,11 @@ def prompt(path, commit, failure_log, known, history, project='', plan=''):
         "history": history_preview, "decision_ids": json.dumps([d['id'] for d in known])})
 
 
+def observations(review):
+    """Ignore formatting/action wording when comparing the claimed retry basis."""
+    return sorted(set(' '.join(item.split()).casefold() for item in review.get('evidence', [])))
+
+
 def failure_report_prompt(path, commit, failure_log, known, project="", plan=""):
     preview, sources = context(known, [], project, plan)
     return ('\nIf unable to repair, avoid another agent repeating your investigation: write %s '
@@ -88,3 +93,14 @@ def reject(state, scope, reason, agent):
             'then confirm when the prerequisite is restored. '
             'Rejected report from agent %s: %s. The report and execution logs remain in that agent run directory.'
             % (agent, reason))
+
+
+def correction_prompt(previous_run, reason):
+    """Keep original observations available when only the receipt needs correction."""
+    return ('\nPROTOCOL CORRECTION, SAME EVIDENCE\n'
+            'Read the prior diagnosis at %s and its execution logs in %s. '
+            'Reuse its valid observations and correct this validation error: %s. '
+            'Do not repeat the investigation solely to repair the report format. '
+            'Inspect additional evidence only where missing, contradictory or stale. '
+            'Write the corrected report to your own output path above; preserve the original.\n'
+            % (previous_run / 'repair-diagnosis.json', previous_run, reason))

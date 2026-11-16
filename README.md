@@ -60,6 +60,8 @@ bzz gui
 
 In the browser, open **Settings → AI providers**, add your provider, choose its models and use **Login** for subscription access. For API or local-model access, supply the required connection details instead. HaiveQueen uses its own provider profile; your usual CLI login may not be available there. [Provider setup](docs/PROVIDERS.md)
 
+Queen coordination and question/package/integration diagnosis default to **heavy**. Map that class to a capable model with reasoning effort suited to complex work (the shipped example uses `high`). Class, model and reasoning effort are different settings: choosing heavy alone does not make a model stronger. Existing explicit settings are preserved. Higher effort can increase usage; ordinary execution packages can still use smaller models. If no eligible provider offers heavy, scheduling waits for configuration or availability rather than silently choosing medium. Stronger models support these roles but do not replace verification or guarantee successful repairs. [System hardening and verification](docs/SYSTEM-HARDENING.md)
+
 **3. Submit your first request.** In your project's `docs/plans/` folder, create `FIRST-PLAN.md` with this content, replacing the request with your own:
 
 ```markdown

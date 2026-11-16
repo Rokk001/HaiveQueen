@@ -487,7 +487,7 @@ def advance(env, free_mb, alive=None):
         providers = [{**p, 'use': 'preferred'} for p in env.providers
                      if p['name'] not in env.settings.get('excludedProviders', [])
                      and 'Coding' in scheduler.provider_capabilities(p) and not scheduler.reserve_zero(p, conn)]
-        cls = env.settings.get('diagnosisClass', 'medium')
+        cls = env.settings.get('diagnosisClass', 'heavy')
         pick = scheduler.select_provider(providers, cls, [], free, conn=conn)
         folder = checkout(env, plan, package)
         if not pick or not folder:

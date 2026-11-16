@@ -141,6 +141,32 @@ class TechnicalDiagnosis(OrchCase):
         self.assertIn('already been authorized', self.state()['fix']['instruction'])
         self.assertFalse(self.question('fix-escalation'))
 
+    def test_rewording_and_incidental_commit_do_not_create_retry_evidence(self):
+        self.start_review()
+        record = self.finish_review()
+        self.round()
+        self.commit(self.pwt, 'unrelated-note.txt')
+        self.end_fixer(self.fixers()[-1], 'No repair.', verification=False)
+        self.round()
+        self.round()
+        self.finish_review(next_action='Try another wording of the same repair.',
+                           evidence=['  ' + text.upper() + '  ' for text in record['evidence']])
+        self.assertFalse(self.state()['fix'].get('review_authorized'))
+        self.assertIn('same observations', self.state()['fix']['instruction'])
+
+    def test_new_owner_decision_is_a_new_basis_without_discarding_old_attempts(self):
+        self.start_review()
+        self.finish_review()
+        self.round()
+        runtime.add_decision(self.conn, 'testproj', 'owner', 'The documented behavior is now authoritative.', plan=REL)
+        self.end_fixer(self.fixers()[-1], 'No repair; new decision requires diagnosis.', verification=False)
+        self.round()
+        self.round()
+        self.finish_review()
+        self.assertTrue(self.state()['fix'].get('review_authorized'))
+        self.assertEqual(len([e for e in orchestrator.repair_history(self.conn, 'testproj', REL)
+                              if e['event'] == 'diagnosis-accepted']), 2)
+
     def test_stale_review_cannot_authorize_repair_or_ask_owner(self):
         self.start_review()
         self.finish_review(commit='stale-commit')
@@ -213,6 +239,23 @@ class TechnicalDiagnosis(OrchCase):
         self.assertEqual(len(questions), 1)
         self.assertIn('structured diagnosis', questions[0]['question'])
         self.assertNotIn('Give an instruction', questions[0]['question'])
+
+    def test_protocol_correction_reuses_prior_observations_without_embedding_history(self):
+        agent = self.start_review()
+        record = self.finish_review(why_new='')
+        prior = self.env().run_dir(agent['name']) / 'repair-diagnosis.json'
+        self.round()
+        correction = self.fixers()[-1]
+        self.assertNotEqual(correction['name'], agent['name'])
+        prompt = (self.env().run_dir(correction['name']) / 'prompt.md').read_text(encoding='utf-8')
+        self.assertIn(str(prior), prompt)
+        self.assertIn('Do not repeat the investigation solely', prompt)
+        self.assertEqual(json.loads(prior.read_text(encoding='utf-8')), record)
+        self.finish_review()
+        self.assertTrue(self.state()['fix']['review_authorized'])
+        self.round()
+        self.assertFalse(self.state()['fix']['diagnosis'])
+        self.assertFalse(self.question('fix-escalation'))
 
     def test_protocol_recovery_answer_requires_diagnosis_not_direct_repair(self):
         self.start_review()

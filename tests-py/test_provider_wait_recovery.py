@@ -4,6 +4,16 @@ from haivequeen import bees, dashboard_data, hives, runtime
 
 
 class WaitTextTests(TestCase):
+    def test_offline_and_disabled_are_not_reported_as_slot_shortage(self):
+        for unavailable, reason in [('offline', 'offline'), ('disabled', 'disabled')]:
+            with mock.patch('haivequeen.usage.limit_windows') as limits:
+                available, detail = hives.provider_wait_check(None, None, None,
+                    {'slots': 0, 'unavailable': unavailable}, 0, None)
+            self.assertFalse(available)
+            self.assertIn(reason, detail)
+            self.assertNotIn('slots', detail)
+            limits.assert_not_called()
+
     def test_no_reason_does_not_claim_provider_is_busy(self):
         for state in ('codex_wait', 'provider_wait'):
             self.assertEqual(dashboard_data.status_text({'state':state}), 'Waiting for scheduler reassessment')

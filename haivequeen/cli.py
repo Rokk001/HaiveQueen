@@ -377,7 +377,7 @@ def cmd_requeen(args, conn):
         env = next(e for e in scheduler.load_projects(conn, machine) if e.name == row['project'])
         with loop.hive_schedule_lock():
             hives.requeen(conn, row['project'], row['plan_path'], provider=args.provider, providers=env.providers,
-                          queen_class=env.settings.get('queenClass', 'medium'), excluded=machine.get('excludedProviders', []))
+                          queen_class=env.settings.get('queenClass', 'heavy'), excluded=machine.get('excludedProviders', []))
             hives.schedule_round(conn, machine, [env], plan_files=[row['plan_path']])
     except (ValueError, StopIteration) as exc:
         return fail(str(exc) or 'Project not found')

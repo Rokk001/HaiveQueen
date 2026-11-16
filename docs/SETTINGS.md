@@ -36,8 +36,8 @@ Values shown are application defaults. Explicit machine settings override them; 
 | `owner` | `"Owner"` | How the Queens and Agents call you in their texts. |
 | `hives` | `2` | Maximum simultaneous plans. |
 | `excludedProviders` | `[]` | Providers excluded from scheduling. |
-| `queenClass` | `"medium"` | The model class of the Queens (light, medium or heavy). |
-| `diagnosisClass` | `"medium"` | The class used to review technical questions; model and effort come from the provider settings for this class. |
+| `queenClass` | `"heavy"` | Recommended coordination class. Map it to a capable model and suitable reasoning effort in Providers. Explicit existing values are preserved. |
+| `diagnosisClass` | `"heavy"` | Question, package and integration diagnosis. Model and effort come from Providers; explicit existing values are preserved. |
 | `beesPerQueen` | `3` | How many Agents a Queen may have running at the same time. |
 | `roundMinutes` | `5` | The time between coordinator rounds in minutes. |
 | `escalateAfter` | `3` | Failed attempts trigger diagnosis before another attempt or a more expensive model is authorized. |
@@ -213,3 +213,5 @@ Choose Local, Git or Custom in Workflow and checks. Templates change the draft o
 | `agentStallSeconds` | Silent-agent warning threshold, default 3600 seconds; 0 disables it. A warning never terminates the agent. |
 
 Legacy project files without `wayOfWorking` derive enabled steps from their existing command fields and publication setting. New explicit configurations use the switches above. `nextVersion` selects a newer full-version target for prereleases; see the release guide for numbering and initial-version handling.
+
+Queen and diagnosis defaults do not change ordinary package classes or ready-check classes. New provider entries suggest high effort for heavy; the model still needs configuration. The scheduler requires the requested class: without an eligible provider it waits, retaining quota, RAM and capability protections. The low-level model lookup can resolve a missing class to a neighbouring class for existing callers; that lookup is not scheduler permission to silently downgrade a new assignment. See [System hardening](SYSTEM-HARDENING.md).

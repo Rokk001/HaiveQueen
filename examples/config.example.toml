@@ -2,7 +2,8 @@
 slots = 2                 # agent processes shared by all projects
 hives = 2                 # maximum plans with running Queens, machine-wide
 excludedProviders = []    # provider names never used
-queenClass = "medium"     # project may override
+queenClass = "heavy"      # global coordination default
+diagnosisClass = "heavy"  # question, package and integration diagnosis
 beesPerQueen = 3          # project may override
 escalateAfter = 3         # failures per class before escalation
 readyCheckClass = "medium"   # class of the check agent of bzz ready
@@ -34,7 +35,7 @@ beeMode = "subagent"   # how the Queen of this provider runs her agents: subagen
 [providers.classes]
 light = { model = "claude-haiku-5-5", effort = "medium" }
 medium = { model = "claude-sonnet-5-5", effort = "medium" }   # optional per model: add contextLimitTokens = 200000 inside the braces to override the global value
-heavy = { model = "claude-opus-5-5", effort = "medium" }
+heavy = { model = "claude-opus-5-5", effort = "high" }
 
 [[providers]]
 name = "codex"
@@ -49,7 +50,7 @@ capabilitiesVersion = 1
 [providers.classes]
 light = { model = "gpt-6-luna", effort = "medium" }
 medium = { model = "gpt-6.1-terra", effort = "medium" }
-heavy = { model = "gpt-6.1-sol", effort = "medium" }
+heavy = { model = "gpt-6.1-sol", effort = "high" }
 
 # A CLI HaiveQueen does not know brings its profile values itself (Claude, Codex, OpenCode and Kilo Code have them built in). It is accepted only when it
 # writes one of the output formats HaiveQueen reads: "claude", "codex" or "opencode". Example, kept as a comment:

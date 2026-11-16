@@ -812,6 +812,9 @@ def _async():
 
 
 def _command(conn, env, plan, state, folder, step, free_mb):
+    if state.get('interrupted_deploy') and step == 'Deploy':
+        state.pop('interrupted_deploy')
+        return _uncertain_deploy(conn, env, plan, state)
     command = commands(env)[step]
     if not command:
         return _done(conn, env, plan, state, step, "skipped")
@@ -898,9 +901,12 @@ def _command(conn, env, plan, state, folder, step, free_mb):
         return None
     instrumented = bool(state['job'].get('checks', {}).get('suite')) or bool(
         state['job'].get('check_events') and Path(state['job']['check_events']).exists())
+    if result == 'lost' and step == 'Deploy':
+        state.pop('job', None)
+        return _uncertain_deploy(conn, env, plan, state)
     if result == 'lost' and instrumented:
         result = (143, 'worker ended without a completion result')
-    if result == "lost":   # the process of the command is gone without a result (HaiveQueen ended): run the step again
+    if result == "lost":
         state.pop("job", None)
         state["steps"].pop(step, None)
         save(conn, env.name, plan, state)
@@ -1066,6 +1072,8 @@ def _harvest_only(conn, env, plan, state):
     step = job["step"]
     if result == "lost" or result[0] != 0:
         state["steps"].pop(step, None)   # the step runs again at the resume
+        if result == 'lost' and step == 'Deploy':
+            state['interrupted_deploy'] = True
     else:
         state["steps"][step] = "done"
         state["ran"].append(step)
@@ -1075,6 +1083,21 @@ def _harvest_only(conn, env, plan, state):
             state["merged"] = integration.head_commit(_worktree(env, plan))
         _next_step(env, state, step)
     save(conn, env.name, plan, state)
+
+
+def _uncertain_deploy(conn, env, plan, state):
+    """A vanished publisher is not proof that no external side effects happened."""
+    reason = ('Deploy process ended without a completion result. The installed state is unknown; '
+              'partial delivery may already have happened. Reconcile the retained execution logs, '
+              'target commit, artifacts and actual destination before authorizing a retry. '
+              'Do not blindly repeat deployment or infer success from copied files. '
+              'If a retry is needed, verify that completed effects are preserved and not duplicated.')
+    result = _red(conn, env, plan, state, 'Deploy', reason)
+    state['fix'].update(review_required=True, instruction=reason)
+    _record_repair(conn, env.name, plan, 'interrupted-deploy',
+                   log_file=state.get('log_file'), reason=reason)
+    save(conn, env.name, plan, state)
+    return result
 
 
 def authentication_failure(error):
@@ -1515,7 +1538,7 @@ def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
     excluded = list(env.settings.get("excludedProviders") or [])
     threshold = int(env.settings.get("escalateAfter", 3))
     attempts = _attempts(conn, env, plan)
-    cls = attempts.get("cls") or str(env.settings.get("queenClass", "medium"))
+    cls = attempts.get("cls") or str(env.settings.get("queenClass", "heavy"))
     n = int(attempts.get("n", 0))
     if fix.get('review_authorized'):
         selected = fix.get('review_class', cls)
@@ -1523,7 +1546,7 @@ def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
             cls, n = selected, 0
     elif fix.get('review_required') or n >= threshold:
         diagnosis = True
-        cls = str(env.settings.get("diagnosisClass", "medium"))
+        cls = str(env.settings.get("diagnosisClass", "heavy"))
     if bees.drain_refusal():
         _blocker(conn, env, plan, "waiting to start the fix agent: HaiveQueen waits for an update")
         return None
@@ -1574,7 +1597,11 @@ def _start_fix(conn, env, plan, state, free_mb, alive, owner_text=""):
         action['prompt'] += '\nPlan: %s\nWorktree: %s\n' % (plan, folder)
         action['prompt'] += '\nTopics reserved for the owner: ' + json.dumps(env.settings.get('ownerTopics', []))
         action['prompt'] += '\nPrevious review feedback: ' + str(fix.get('instruction', ''))
-        action['prompt'] += '\nCurrent repair class: ' + str(attempts.get('cls') or env.settings.get('queenClass', 'medium'))
+        rejection = fix.get('review_rejection')
+        if rejection and rejection.get('scope') == _review_scope(conn, env, plan, fix):
+            previous_run = env.run_dir(rejection['agent'])
+            action['prompt'] += repair_review.correction_prompt(previous_run, rejection['reason'])
+        action['prompt'] += '\nCurrent repair class: ' + str(attempts.get('cls') or env.settings.get('queenClass', 'heavy'))
         action['prompt'] += '\nAvailable repair classes: ' + json.dumps(sorted({c for p in env.providers
             if p['name'] not in excluded for c, entry in p.get('classes', {}).items() if entry.get('model')}))
     st = {"names": existing, "busy": [], "plan_status": {sch.norm_plan(plan): "RUNNING"}, "by_path": {sch.norm_plan(plan): {"path": plan}}}
@@ -1621,7 +1648,7 @@ def _finish_review(conn, env, plan, state):
                 from . import shared_diagnosis
                 shared = shared_diagnosis.validate(conn, env, plan, state,
                     fix.get('review_peers', []), review['shared_cause'])
-            current_class = _attempts(conn, env, plan).get('cls') or env.settings.get('queenClass', 'medium')
+            current_class = _attempts(conn, env, plan).get('cls') or env.settings.get('queenClass', 'heavy')
             selected_class = review.get('repair_class', current_class)
             if selected_class != current_class:
                 if not isinstance(review.get('class_reason'), str) or not review['class_reason'].strip():
@@ -1630,11 +1657,19 @@ def _finish_review(conn, env, plan, state):
                            (p.get('classes', {}).get(selected_class) or {}).get('model') for p in env.providers):
                     raise ValueError('the requested repair class is not configured')
             signature = json.dumps({key: review[key] for key in
-                                    ('commit', 'failure_log', 'evidence', 'next_action')}, sort_keys=True)
+                                    ('commit', 'failure_log', 'reviewed_decisions', 'evidence', 'next_action')}, sort_keys=True)
             previous = [e.get('signature') for e in repair_history(conn, env.name, plan)
                         if e.get('event') == 'diagnosis-accepted']
             if signature in previous:
                 raise ValueError('this repair approach has already been authorized; diagnose its result before choosing a new approach')
+            observations = repair_review.observations(review)
+            for entry in repair_history(conn, env.name, plan):
+                prior = entry.get('review') or {}
+                if (entry.get('event') == 'diagnosis-accepted' and prior.get('kind') == 'technical'
+                        and prior.get('reviewed_decisions') == review.get('reviewed_decisions')
+                        and observations == repair_review.observations(prior)):
+                    raise ValueError('the same observations already authorized a repair; report its actual outcome '
+                                     'and new evidence before another attempt, not just a reworded action or changed commit')
         else:
             signature = ''
     except (OSError, ValueError, KeyError) as exc:

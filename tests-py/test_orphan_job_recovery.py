@@ -59,6 +59,44 @@ class OrphanRecoveryTests(unittest.TestCase):
             self.assertIsNone(orchestrator._harvest(None,self.env,'plan',self.state))
         self.assertIn('job',self.state)
 
+    def test_instrumented_deploy_without_receipt_also_requires_reconciliation(self):
+        self.test_partial_deploy_without_receipt_requires_reconciliation_before_retry(True)
+
+    def test_partial_deploy_without_receipt_requires_reconciliation_before_retry(self, instrumented=False):
+        state = dict(phase='pipeline', step='Deploy', steps={'Push':'done','Deploy':'running'},
+                     ran=['Push'], job={'step':'Deploy'}, deployed='')
+        if instrumented:
+            state['job']['checks'] = {'suite': 'deployment checks'}
+        def red(conn, env, plan, state, step, reason):
+            state.update(phase='fix', fix={'step': step, 'error': reason})
+            return 'red'
+        with mock.patch.object(orchestrator, 'commands', return_value={'Deploy':'deliver'}), \
+             mock.patch.object(orchestrator, '_observe_checks', return_value=False), \
+             mock.patch.object(orchestrator, '_harvest', return_value='lost'), \
+             mock.patch.object(orchestrator, '_red', side_effect=red), \
+             mock.patch.object(orchestrator, 'save'), \
+             mock.patch.object(orchestrator, '_record_repair'):
+            result = orchestrator._command(None, self.env, 'plan', state, self.tmp.name, 'Deploy', 16000)
+        self.assertEqual(result, 'red')
+        self.assertTrue(state['fix']['review_required'])
+        self.assertIn('installed state is unknown', state['fix']['instruction'])
+        self.assertEqual(state['deployed'], '')
+        self.assertEqual(state['ran'], ['Push'])
+
+    def test_paused_lost_deploy_retains_reconciliation_requirement_for_resume(self):
+        state = dict(phase='pipeline', step='Deploy', steps={'Deploy':'running'}, ran=[],
+                     job={'step':'Deploy'})
+        with mock.patch.object(orchestrator, '_observe_checks', return_value=False), \
+             mock.patch.object(orchestrator, '_harvest', return_value='lost'), \
+             mock.patch.object(orchestrator, 'save'):
+            orchestrator._harvest_only(None, self.env, 'plan', state)
+        self.assertTrue(state['interrupted_deploy'])
+        with mock.patch.object(orchestrator, '_uncertain_deploy', return_value='red') as reconcile, \
+             mock.patch.object(orchestrator, 'commands') as commands:
+            self.assertEqual(orchestrator._command(None, self.env, 'plan', state, self.tmp.name, 'Deploy', 16000), 'red')
+        reconcile.assert_called_once()
+        commands.assert_not_called()
+
     def test_dead_job_is_not_displayed_as_running(self):
         hive={'project':'project','plan_path':'plan'}
         with mock.patch.object(orchestrator,'load',return_value=self.state), mock.patch.object(orchestrator.agent_process,'recorded_alive',return_value=False):

@@ -1201,7 +1201,7 @@ def _start_process_locked(env, plan, package, name, cls, task, steps, paths, rul
             while next_class(offered, current, excluded):
                 current = next_class(offered, current, excluded)
             cls = current   # the owner's answer directs the retry to the highest offered class
-        queen_class = env.settings.get('queenClass', 'medium')
+        queen_class = env.settings.get('queenClass', 'heavy')
         if (scheduler.class_index(requested_class) < scheduler.class_index(queen_class) and
                 failure_count(env.conn, env.name, plan, package, queen_class) >= threshold):
             current = next_class(escalation_providers(env, plan, package), queen_class, excluded)

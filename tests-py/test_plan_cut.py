@@ -48,6 +48,16 @@ class CutRoleTests(unittest.TestCase):
             self.assertIn(part, text)
         self.assertNotIn("{{", text)
 
+    def test_cut_assigns_whole_flow_responsibility_without_forcing_extra_packages(self):
+        text = roles.role_text('queen-cut', {})
+        for requirement in ('## Cut assessment', 'shared mutable state', 'interruption/recovery',
+                            'package responsible for connecting', 'only package for simple work',
+                            'Explain the chosen class', 'instead of copying the whole plan'):
+            self.assertIn(requirement, text)
+        reviewer = roles.role_text('ready-check', {})
+        self.assertIn('follow the actual entry point', reviewer)
+        self.assertIn('unused component', reviewer)
+
 
 class CutCheckTests(test_plan_submit.SubmittedPlanTests):
     """bzz plan check with a requirement list in the state file."""

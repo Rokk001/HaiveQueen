@@ -1880,7 +1880,7 @@ function mount(document, bootstrap) {
     const {label,...preset}=bootstrap.presets[protocol] || {protocol,command:protocol,args:[]};
     return {...copy(preset),name:'',access:'subscription',enabled:true,slots:2,use:'preferred',capabilities:['Coding','Queen'],beeMode:preset.beeMode || 'process',
       apiKey:'',address:'',contextWindow:0,contextLimit:0,allowedTools:[],
-      classes:{light:{model:'',effort:'medium'},medium:{model:'',effort:'medium'},heavy:{model:'',effort:'medium'}},claudeTools:''};
+      classes:{light:{model:'',effort:'medium'},medium:{model:'',effort:'medium'},heavy:{model:'',effort:'high'}},claudeTools:''};
   }
   function changed() {editor.dirty=true;const marker=$('dirty-marker');if(marker)marker.textContent=t('Unsaved changes');for(const node of view.querySelectorAll('[data-saved-only]'))node.disabled=true;}
   function fields(parent, object, path, root, omit=new Set(), allowAdd=true, modelChoices=null) {

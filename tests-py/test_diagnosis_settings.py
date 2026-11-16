@@ -62,14 +62,15 @@ class DiagnosisSettings(unittest.TestCase):
             self.assertEqual(list(Path(folder).iterdir()), [])
 
     def test_diagnosis_class_is_exposed_like_queen_class(self):
-        self.assertEqual(scheduler.DEFAULT_SETTINGS['diagnosisClass'], 'medium')
+        self.assertEqual(scheduler.DEFAULT_SETTINGS['diagnosisClass'], 'heavy')
+        self.assertEqual(scheduler.DEFAULT_SETTINGS['queenClass'], 'heavy')
         self.assertEqual(settings.CHOICES['diagnosisClass'], settings.CHOICES['queenClass'])
         self.assertIn('diagnosisClass', settings.GENERAL_LABELS)
         self.assertIn('effort', settings.GENERAL_HELP['diagnosisClass'])
         self.assertIn('diagnosisClass', settings.SHORT_KEYS)
         data = json.loads(re.search(r'<script id="bootstrap" type="application/json">(.*?)</script>',
                                     web_ui.page('test', 'English')).group(1))
-        self.assertEqual(data['general']['diagnosisClass'], 'medium')
+        self.assertEqual(data['general']['diagnosisClass'], 'heavy')
         self.assertEqual(data['choices']['diagnosisClass'], ['light', 'medium', 'heavy'])
 
     def test_configured_class_uses_provider_model_and_effort(self):
@@ -79,3 +80,18 @@ class DiagnosisSettings(unittest.TestCase):
             'heavy': {'model': 'other-model', 'effort': 'high'}}}]
         self.assertEqual(scheduler.class_model(providers, 'test', config['diagnosisClass']),
                          {'Model': 'chosen-model', 'Effort': 'low'})
+
+    def test_explicit_existing_classes_and_effort_survive_new_defaults(self):
+        for cls in ('light', 'medium', 'heavy'):
+            machine = {'queenClass': cls, 'diagnosisClass': cls,
+                       'providers': [{'name': 'test', 'classes': {cls: {'model': 'chosen', 'effort': 'low'}}}]}
+            configured = scheduler.build_settings(machine, {})
+            self.assertEqual(configured['queenClass'], cls)
+            self.assertEqual(configured['diagnosisClass'], cls)
+            self.assertEqual(configured['providers'], machine['providers'])
+        self.assertEqual(scheduler.build_settings({}, {})['queenClass'], 'heavy')
+
+    def test_missing_heavy_model_waits_instead_of_silently_scheduling_medium(self):
+        provider = {'name': 'test', 'protocol': 'codex', 'slots': 1, 'capabilities': ['Queen', 'Coding'],
+                    'classes': {'medium': {'model': 'chosen', 'effort': 'medium'}}}
+        self.assertIsNone(scheduler.select_provider([provider], 'heavy', ['Queen'], {'test': 1}))

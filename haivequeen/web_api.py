@@ -133,7 +133,7 @@ def queen_providers(conn, project, plan):
     env = next((e for e in sch.load_projects(conn, config.load_config()) if e.name == project), None)
     if env is None:
         raise ValueError('Unknown project')
-    cls = env.settings.get('queenClass', 'medium')
+    cls = env.settings.get('queenClass', 'heavy')
     current = (hives.get(conn, project, plan) or {}).get('provider')
     names = [{'name': p['name'], 'current': p['name'] == current,
               'selectable': p['name'] not in env.settings.get('excludedProviders', []) and not p.get('unavailable')}
@@ -385,7 +385,7 @@ def execute(conn, action, data):
                 env, names = queen_providers(conn, project, plan)
                 if data.get('provider') not in [p['name'] for p in names if p['selectable']]:
                     raise ValueError('Select a provider offering the Queen class')
-                hives.requeen(conn, project, plan, data['provider'], providers=env.providers, queen_class=env.settings.get('queenClass', 'medium'), excluded=env.settings.get('excludedProviders', []))
+                hives.requeen(conn, project, plan, data['provider'], providers=env.providers, queen_class=env.settings.get('queenClass', 'heavy'), excluded=env.settings.get('excludedProviders', []))
             else:
                 fn = {'plan/start': hives.start_plan, 'plan/back-to-draft': hives.back_to_draft, 'plan/stop-gracefully': hives.pause_plan, 'plan/force-stop': hives.stop_hive, 'plan/resume': hives.start_again, 'plan/cancel': hives.cancel_plan}[action]
                 fn(conn, project, plan)

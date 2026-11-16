@@ -476,6 +476,10 @@ def provider_wait_check(conn, env, hive, provider, free, plan):
     from . import usage
     if provider.get('login') is False:   # enabled but not ready: login missing, model not listed, own server not answering
         return False, 'not ready: %s' % (provider.get('notReady') or 'unknown reason')
+    if provider.get('unavailable') == 'disabled' or not provider.get('enabled', True):
+        return False, 'the provider is disabled'
+    if provider.get('unavailable') == 'offline' or provider.get('offline'):
+        return False, 'the provider is offline; waiting for a successful connection check'
     full = [w for w in usage.limit_windows(conn, provider) if w['used_pct'] >= 100]
     if full:
         if any(w.get('unknown') for w in full):
@@ -1238,7 +1242,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
                     continue
                 providers = [{**p, 'use': 'preferred'} for p in env.providers if p['name'] not in excluded and 'Queen' in p.get('capabilities', [])
                              and not sch.reserve_zero(p, conn)]   # a used-up window (reserve 0) blocks the provider
-                cls = str(env.settings.get('queenClass', 'medium'))
+                cls = str(env.settings.get('queenClass', 'heavy'))
                 if hive:
                     history = [a for a in runtime.list_agents(conn, env.name, 'all') if a.get('plan_path') == path and a.get('phase') == 'queen']
                     if history and interrupt.kind_of(history[-1]) == interrupt.VANISHED and history[-1].get('class'):
@@ -1365,7 +1369,7 @@ def schedule_round(conn, machine, envs, dry_run=False, free_ram=None, alive=None
             providers = [{**p, 'use': 'preferred'} for p in env.providers if p['name'] not in excluded and 'Queen' in p.get('capabilities', [])
                          and not sch.reserve_zero(p, conn)]   # a used-up window (reserve 0) blocks the provider
             eligible = any(p['status'] in plan_mod.QUEEN_STATUSES and ((get(conn, env.name, p['path']) or {}).get('state') in (None, 'waiting', 'requeen')) for p in runtime.list_plans(conn, env.name))
-            can_start = eligible and queen_count < limit and bool(sch.select_provider(providers, str(env.settings.get('queenClass', 'medium')), ['Queen'], pool.free, conn=conn))
+            can_start = eligible and queen_count < limit and bool(sch.select_provider(providers, str(env.settings.get('queenClass', 'heavy')), ['Queen'], pool.free, conn=conn))
             env.log('round done: %d Queen(s) started%s' % (result['projects'][env.name]['started'], ''.join('; ' + text for text in skipped[env.name])))
             try:
                 update_waiting(conn, env, alive)

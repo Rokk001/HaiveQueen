@@ -76,8 +76,8 @@ GENERAL_LABELS = {"slowTestSeconds": N_("Slow test threshold (seconds)"), "langu
                   "owner": N_("Owner name"), "queenClass": N_("Queen class"), "diagnosisClass": N_("Question / diagnosis agent class"), "beesPerQueen": N_("Agents per Queen"),
                   "maxConcurrentCompileChecks": N_("Max concurrent compile checks")}
 GENERAL_HELP = {"slowTestSeconds": N_("Show measured individual tests at or above this duration in log details; advisory only, no automatic retry or blocking."), "language": N_("The language of the HaiveQueen interface."), "slots": N_("The number of agents that may run at once."), "roundMinutes": N_("The time between coordinator rounds in minutes."), "escalateAfter": N_("Failed attempts trigger diagnosis before another attempt or a more expensive model is authorized."),
-                "owner": N_("How the Queens and Agents call you in their texts."), "queenClass": N_("The model class of the Queens (light, medium or heavy)."),
-                "diagnosisClass": N_("The class used to review technical questions; model and effort come from the provider settings for this class."),
+                "owner": N_("How the Queens and Agents call you in their texts."), "queenClass": N_("Heavy is recommended for Queen coordination. Configure a capable model and suitable reasoning effort for this class in Providers; existing choices are preserved."),
+                "diagnosisClass": N_("Heavy is recommended for question, package and integration diagnosis; model and effort come from Providers. Higher effort can cost more; class alone does not guarantee quality."),
                 "beesPerQueen": N_("How many Agents a Queen may have running at the same time."),
                 "maxConcurrentCompileChecks": N_("The most compile checks that run at the same time on this computer, across all projects and Queens, also for several plans of one project.")}
 SETTING_HELP.update({"escalateAfter": N_("Overrides the General value for this Project."), "allowedTools": N_("Commands agents of this Project may run without asking.")})
