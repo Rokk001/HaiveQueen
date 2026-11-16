@@ -196,3 +196,14 @@ The targeted repair checks cover both package repair and integration repair:
 These isolated regression scenarios use deterministic agent results; they do not
 claim that a live provider has repaired an outstanding production plan. Production
 state, running agents and owner acceptance are never changed by these tests.
+
+### Provider refusal details
+
+When `agent start` cannot select a provider, its waiting reason names each provider,
+its free/configured slots and the blocking gate: disabled/excluded/offline,
+login or connection not ready, zero configured slots, occupied slots, missing
+model or capability, unknown/failed/stale quota observation, capability usage
+threshold or exhausted quota. Stale readings include their age and freshness
+limit. The same refusal text is retained in the Agent-start event log, so a later
+successful quota refresh does not erase the reason for the earlier refusal.
+No synchronous provider probe is added; unknown quota still prevents starts.

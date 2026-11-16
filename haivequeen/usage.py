@@ -223,32 +223,41 @@ USAGE_INTERVAL = 60              # seconds between usage checks of a model provi
 USAGE_UNREACHABLE_INTERVAL = 600   # seconds between usage checks of a provider whose last check failed (not reachable)
 
 
-def quota_verified(conn, provider, now=None):
-    """Start eligibility requires a successful reading from this refresh period.
-
-    Historical readings remain available for display, never as a start permit.
-    The existing scheduled refresh supplies the next observation without an
-    additional synchronous provider request for each prospective agent.
-    """
+def quota_block_reason(conn, provider, now=None):
+    """Explain the same cached observation gate used to authorize starts."""
     if conn is None:
-        return False
+        return 'quota unknown: no observation database'
     source = provider.get('limit')
     key = _claude_key(provider) if source == 'claude' else CODEX_USAGE_KEY + ':' + str(provider['name'])
     now = time.time() if now is None else now
     try:
         snapshot = json.loads(runtime.kv_get(conn, GLOBAL_PROJECT, key) or '{}')
-        if not isinstance(snapshot, dict) or snapshot.get('refresh_error'):
-            return False
-        saved = datetime.fromisoformat(snapshot.get('saved') or '')
+        if not isinstance(snapshot, dict):
+            return 'quota unknown: invalid observation'
+        if snapshot.get('refresh_error'):
+            return 'quota unknown: last refresh failed'
+        if not snapshot.get('saved'):
+            return 'quota unknown: no successful observation'
+        saved = datetime.fromisoformat(snapshot['saved'])
         if saved.tzinfo is None:
             saved = saved.astimezone()
-        if not 0 <= now - saved.timestamp() < USAGE_INTERVAL:
-            return False
+        age = now - saved.timestamp()
+        if age < 0:
+            return 'quota unknown: observation timestamp is in the future'
+        if age >= USAGE_INTERVAL:
+            return 'quota stale: observation %.1f s old, freshness limit %s s' % (age, USAGE_INTERVAL)
         windows = [_claude_window(snapshot[key], True, int(now))
                    for key in ('fiveHour', 'sevenDay') if snapshot.get(key)]
-        return bool(windows) and all(window and window.get('pct') is not None for window in windows)
+        if not windows or not all(window and window.get('pct') is not None for window in windows):
+            return 'quota unknown: no valid usage window'
+        return ''
     except (ValueError, TypeError, AttributeError, KeyError, OverflowError):
-        return False
+        return 'quota unknown: invalid observation'
+
+
+def quota_verified(conn, provider, now=None):
+    """Historical readings remain visible but cannot authorize a new start."""
+    return not quota_block_reason(conn, provider, now)
 
 
 # Choose how often the usage status of a model provider is asked for.

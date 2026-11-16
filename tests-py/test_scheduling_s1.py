@@ -88,7 +88,8 @@ class SlotAndProviderChoiceTests(RoundCase):
         with mock.patch('haivequeen.bees.valid_bee_worktree', return_value=True), mock.patch('haivequeen.loop._do_start', return_value=True) as start:
             self.assertFalse(bees.start_process(self.env(), REL, 'P1', 'Bea', 'medium', 'task', ['one'], [], [], cwd=str(wt)))
         start.assert_not_called()
-        self.assertIn('no provider with a free slot', bees.LAST_REFUSAL)
+        self.assertIn('claude: all 1 slots occupied (free slots 0/1)', bees.LAST_REFUSAL)
+        self.assertIn('codex: all 1 slots occupied (free slots 0/1)', bees.LAST_REFUSAL)
         self.assertFalse(bees.unconfirmed_embedded(self.conn, 'testproj', REL))
 
     # A subagent Bee on the Queen's own provider needs a free slot of it.

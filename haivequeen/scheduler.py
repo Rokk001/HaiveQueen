@@ -510,8 +510,41 @@ def capability_available(providers: list, needs: list) -> bool:
     return any(p["slots"] > 0 and ("Confidential data" not in [canonical_capability(n) for n in needs] or _local_confidential(p)) and all(canonical_capability(n) in [canonical_capability(c) for c in p["capabilities"]] for n in needs) for p in providers)
 
 
+def provider_block_reason(p, cls, needs, free, conn=None, limits=None, now=None):
+    """Explain selection gates without probing providers or changing their state."""
+    from . import usage
+    if p.get('unavailable') or not p.get('enabled', True):
+        return 'provider ' + str(p.get('unavailable') or 'disabled')
+    if p.get('login') is False:
+        return 'not ready: ' + str(p.get('notReady') or 'login or connection unavailable')
+    if p['slots'] <= 0:
+        return 'no slots configured (0)'
+    if int(free.get(p['name'], 0)) <= 0:
+        return 'all %s slots occupied' % p['slots']
+    if not (p.get('classes', {}).get(cls) or {}).get('model'):
+        return 'no model configured for class ' + cls
+    needs = [canonical_capability(n) for n in (needs or []) if n]
+    if 'Confidential data' in needs and not _local_confidential(p):
+        return 'confidential work requires a local provider'
+    missing = [n for n in (needs or ['Coding']) if n not in p['capabilities']]
+    if missing:
+        return 'missing capability: ' + ', '.join(missing)
+    if p.get('limit') in ('claude', 'codex') and limits is None and not os.environ.get('BZZ_PROVIDER_LIMITS_FILE') and not os.environ.get('BZZ_RUNTIME_OVERRIDE'):
+        reason = usage.quota_block_reason(conn, p, now)
+        if reason:
+            return reason
+    if threshold_reached(p, needs, conn, limits, now):
+        thresholds = p.get('capabilityThresholds') or {}
+        threshold = min((thresholds.get(n, 100) for n in (needs or ['Coding'])), default=100)
+        return 'usage reached the required capability threshold (%s%%)' % threshold
+    resv = provider_reserve(p, conn, limits, now)
+    if resv is not None and resv <= 0:
+        return 'quota exhausted'
+    return ''
+
+
 def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "", prefer: str = "",
-                    protocol: str = "", conn=None, limits=None):
+                    protocol: str = "", conn=None, limits=None, rejected=None):
     """Return the provider that gets a task of this class, or None.
 
     Candidates have slots above 0 and a free slot, the class in their entry, all needed capabilities (a package that needs one goes
@@ -526,24 +559,13 @@ def select_provider(providers: list, cls: str, needs, free: dict, avoid: str = "
     cand = []
     now = time.time()
     for idx, p in enumerate(providers, 1):
-        if p["slots"] <= 0 or int(free.get(p["name"], 0)) <= 0:
+        reason = ('protocol mismatch: requires ' + protocol if protocol and p['protocol'] != protocol else
+                  provider_block_reason(p, cname, needs, free, conn, limits, now))
+        if reason:
+            if rejected is not None:
+                rejected[p['name']] = reason
             continue
-        if protocol and p["protocol"] != protocol:
-            continue
-        model = (p["classes"] or {}).get(cname)
-        if not (model and model.get("model")):
-            continue
-        if "Confidential data" in needs and not _local_confidential(p):
-            continue
-        if any(n not in p["capabilities"] for n in needs):
-            continue
-        if "Coding" not in p["capabilities"] and not needs:
-            continue
-        if threshold_reached(p, needs, conn, limits, now):
-            continue
-        resv = provider_reserve(p, conn, limits, now)   # the quota reserve from both usage windows; None without limit (+99 %)
-        if resv is not None and resv <= 0:
-            continue   # a used-up window blocks every package until it resets, capability packages included
+        resv = provider_reserve(p, conn, limits, now)
         cand.append((p, idx, resv))
     if not cand:
         return None
