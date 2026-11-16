@@ -178,3 +178,38 @@ passing identical check through authorization, result recording and next-step di
 five renamed investigation proposals with incidental commits; changed goals; test-only
 commits; changed assertions plus incidental implementation edits; invalid baselines;
 legacy receipts and grants; replay protection and persisted progress after restart.
+
+## Full-workflow progress (protocol 4)
+
+Protocol 3 proved local implementation changes but could still accept an endless
+series of unused components. The new contract includes `workflow: {entrypoint,
+command, checkpoints, regression_paths}` and `repair.advances`. The initial diagnosis
+must define a focused real-path check covering the required complete flow, including
+failure/recovery, against existing requirements. It must exercise the repaired boundary
+rather than replace it with a mock. No new requirements are invented.
+
+The workflow specification is persisted independently of individual reports. Follow-ups
+cannot replace its entrypoint, command or checkpoint set with a new component test,
+even after restart or an intervening nontechnical report. Selected advances must
+include an unsatisfied workflow checkpoint. Existing requirement and safety checks
+remain mandatory; workflow completion alone does not automatically close a package.
+
+A receipt adds `workflow: {command, before, after}`. Both files are local JSON execution
+summaries: `{checks: {checkpoint: "passed"|"failed"}, exit: integer}` covering the fixed
+checkpoint set, with zero exit only when all passed. Detailed execution output is kept
+beside these summaries for Queen review. HQ requires a selected failing checkpoint
+to become passing, preserves every prior passing checkpoint, and retains the hashes
+of the workflow regressions between rounds. Tests may not be rewritten to move the
+goalposts. Unrelated remaining failures are allowed only with that demonstrated progress.
+
+The initial workflow's relevance and the truth of reported execution remain review
+responsibilities; schema validation is not semantic proof. The gate mechanically rejects
+unchanged workflow results despite green helper tests, new names or incidental commits.
+No full project suite or extra model invocation is introduced by this validation.
+
+Protocol-3 grants are not reused. In-flight older results and historical local-only
+receipts remain evidence but cannot claim verified workflow progress. Failure counters,
+logs and active processes are preserved. Tests cover an actual unused component with
+a passing unit check and still-failing caller flow, real integration success, changed
+workflow definitions/assertions, regressed checkpoints, satisfied-checkpoint recycling,
+legacy grants/receipts and persistence across restart.

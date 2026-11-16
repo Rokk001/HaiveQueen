@@ -235,7 +235,8 @@ class QueenIntegrationTests(RoundCase):
                   'contract': {'objective': 'Fix the incorrect caller argument.',
                                'why_executable': 'The isolated caller can be tested without other packages.',
                                'prerequisites': [], 'requires': [], 'resolves': [],
-                               'repair': {'goal': 'Correct caller', 'behavior': 'Correct argument', 'criterion': 'caller-argument', 'implementation_paths': ['caller.py'], 'regression_paths': ['test_caller.py']},
+                               'repair': {'goal': 'Correct caller', 'behavior': 'Correct argument', 'criterion': 'caller-argument', 'implementation_paths': ['caller.py'], 'regression_paths': ['test_caller.py'], 'advances': ['caller']},
+                               'workflow': {'entrypoint': 'caller.main', 'command': 'python -m unittest test_caller_argument', 'checkpoints': ['caller'], 'regression_paths': ['test_caller.py']},
                                'criteria': [{'id': 'caller-argument',
                                              'expectation': 'The caller passes the expected argument.',
                                              'check': 'python -m unittest test_caller_argument'}]}}

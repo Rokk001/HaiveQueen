@@ -31,10 +31,13 @@ class RepairContractFlow(RoundCase):
                 prerequisites=[dict(id='admission', status='unresolved', reason='legacy callers ignore new gates'),
                                dict(id='primitive', status='verified', reason='isolated probe passed', evidence=[0])],
                 requires=['admission'] if blocked else ['primitive'], resolves=[],
-                repair=dict(goal='Safe activation', behavior='Reject changed candidate', criterion='reject', implementation_paths=['activation.py'], regression_paths=['test_activation.py']),
+                repair=dict(goal='Safe activation', behavior='Reject changed candidate', criterion='reject', implementation_paths=['activation.py'], regression_paths=['test_activation.py'], advances=['value']),
+                workflow=dict(entrypoint='activation.main', command='python workflow.py', checkpoints=['value','cleanup'], regression_paths=['test_activation.py']),
                 criteria=[dict(id='reject', expectation='Reject changed candidate', check='python -m unittest changed'),
                           dict(id='cleanup', expectation='Release owned reservation on rejection', check='python -m unittest cleanup')]))
         state = diagnosis._load(self.conn, 'testproj', REL, 'P1')
+        if state.get('workflow_progress', {}).get('checks', {}).get('value') == 'passed':
+            data['contract']['repair']['advances'] = ['cleanup']
         if state.get('report'):
             latest = bees.attempt_history(self.conn, 'testproj', REL, 'P1', limit=1)['attempts'][0]['attempt']
             data['continuation'] = dict(previous=diagnosis._digest(state['report']), attempt=latest,
@@ -74,7 +77,7 @@ class RepairContractFlow(RoundCase):
         with mock.patch.dict('os.environ', {'BZZ_AGENT': 'queen'}), \
              mock.patch.object(cli.config, 'load_config', return_value=self.machine), \
              mock.patch('haivequeen.package_diagnosis.current_commit', return_value=head), \
-             (contextlib.nullcontext() if real_evidence else mock.patch('haivequeen.repair_contract.implementation_evidence', side_effect=lambda receipt, *args: receipt.update(implementation={'goal': 'Safe activation'}))), \
+             (contextlib.nullcontext() if real_evidence else mock.patch('haivequeen.repair_contract.implementation_evidence', side_effect=lambda receipt, *args: receipt.update(implementation={'goal': 'Safe activation', 'workflow': {'checks': {'value':'passed','cleanup':'failed'}, 'regression_digests':{}}}))), \
              contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             status = cli.cmd_bee(args, self.conn)
         return status, output.getvalue()
@@ -194,6 +197,7 @@ class RepairContractFlow(RoundCase):
         self.start('legacy-step')
         state = diagnosis._load(self.conn, 'testproj', REL, 'P1')
         state['assigned']['contract'].pop('repair')
+        state['assigned']['contract'].pop('workflow')
         state['assigned']['id'] = repair_contract.identity(state['assigned']['contract'])
         runtime.kv_set(self.conn, 'testproj', diagnosis._key(REL, 'P1'), json.dumps(state))
         path, _ = self.receipt('legacy-step', 'head-1')
@@ -270,6 +274,9 @@ class RepairContractFlow(RoundCase):
         path, data = self.receipt('real-repair', after)
         data['baseline'] = dict(commit=before, command=command, exit=baseline.returncode,
             log='baseline.log', regression_files={'test_activation.py':'test.snapshot'})
+        data['workflow'] = dict(command='python workflow.py', before='workflow-before.json', after='workflow-after.json')
+        for label, status in [('before','failed'),('after','passed')]:
+            (self.base / ('workflow-' + label + '.json')).write_text(json.dumps(dict(checks={'value':status,'cleanup':'failed'}, exit=1)))
         path.write_text(json.dumps(data))
         with mock.patch('haivequeen.package_diagnosis.checkout', return_value=folder):
             status, output = self.result('real-repair', 'progress', path, after, real_evidence=True)
@@ -289,3 +296,56 @@ class RepairContractFlow(RoundCase):
         with self.assertRaisesRegex(ValueError, 'perform investigations in diagnosis'):
             self.accept(scope, data)
         self.assertIsNone(diagnosis.authorization(self.conn, 'testproj', REL, 'P1', scope))
+
+    def test_workflow_cannot_shrink_or_change_between_rounds(self):
+        self.accept(*self.report())
+        for field, value in [('entrypoint','component.helper'), ('command','python component_test.py'),
+                              ('checkpoints',['new-component']), ('regression_paths',[])]:
+            scope, report = self.report('head-2', 'Next component')
+            report['contract']['workflow'][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.accept(scope, report)
+
+    def test_completed_workflow_checkpoint_cannot_authorize_endless_components(self):
+        self.accept(*self.report()); self.start('first')
+        path, _ = self.receipt('first')
+        self.assertEqual(self.result('first', 'progress', path)[0], 0)
+        scope, report = self.report('head-2', 'Another component')
+        report['contract']['repair']['advances'] = ['value']
+        with self.assertRaisesRegex(ValueError, 'already satisfied'):
+            self.accept(scope, report)
+        self.assertIsNone(diagnosis.authorization(self.conn, 'testproj', REL, 'P1', scope))
+
+    def test_protocol_three_grant_is_not_reused(self):
+        scope, report = self.report(); self.accept(scope, report)
+        state = diagnosis._load(self.conn, 'testproj', REL, 'P1')
+        state['authorization']['protocol'] = 3
+        runtime.kv_set(self.conn, 'testproj', diagnosis._key(REL, 'P1'), json.dumps(state))
+        self.assertIsNone(diagnosis.authorization(self.conn, 'testproj', REL, 'P1', scope))
+        self.assertFalse(self.start('old-component'))
+        self.assertEqual(diagnosis._load(self.conn, 'testproj', REL, 'P1')['phase'], 'pending')
+
+    def test_persisted_workflow_survives_a_nontechnical_report(self):
+        self.accept(*self.report())
+        state = diagnosis._load(self.conn, 'testproj', REL, 'P1')
+        state['report'] = dict(kind='external')
+        runtime.kv_set(self.conn, 'testproj', diagnosis._key(REL, 'P1'), json.dumps(state))
+        scope, report = self.report('head-2', 'Another target')
+        report['contract']['workflow']['entrypoint'] = 'unused.helper'
+        with self.assertRaisesRegex(ValueError, 'persisted complete workflow'):
+            self.accept(scope, report)
+
+    def test_inflight_local_only_repair_is_retained_without_workflow_credit(self):
+        self.accept(*self.report()); self.start('local-only')
+        state = diagnosis._load(self.conn, 'testproj', REL, 'P1')
+        state['assigned']['contract'].pop('workflow')
+        state['assigned']['id'] = repair_contract.identity(state['assigned']['contract'])
+        runtime.kv_set(self.conn, 'testproj', diagnosis._key(REL, 'P1'), json.dumps(state))
+        path, _ = self.receipt('local-only')
+        status, output = self.result('local-only','progress',path)
+        self.assertEqual(status, 0, output)
+        self.assertEqual(json.loads(output)['outcome'],'observed')
+        state = diagnosis._load(self.conn, 'testproj', REL, 'P1')
+        self.assertIn('local-only',state['observations'])
+        self.assertNotIn('workflow_progress',state)
+        self.assertEqual(bees.failure_count(self.conn, 'testproj', REL, 'P1', 'medium'),1)

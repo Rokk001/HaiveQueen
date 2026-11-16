@@ -886,7 +886,7 @@ def _report_attempt(env, plan, package, cls, outcome, attempt, open_requirements
         state = package_diagnosis._load(env.conn, env.name, plan, package)
         receipt = repair_contract.result(repair_result, state.get('assigned'), attempt,
                                          package_diagnosis.current_commit(env, plan, package))
-        if state.get('assigned', {}).get('contract', {}).get('repair'):
+        if state.get('assigned', {}).get('contract', {}).get('workflow'):
             repair_contract.implementation_evidence(receipt, state['assigned'], package_diagnosis.checkout(env, plan, package))
         else:
             outcome = 'observed'  # Preserve an in-flight legacy result without promoting it to a repair.
@@ -911,6 +911,8 @@ def _report_attempt(env, plan, package, cls, outcome, attempt, open_requirements
     record_attempt(env.conn, env.name, plan, package, cls, outcome, attempt, open_requirements, error, row['verify'] if row else 'code', force_failure)
     if receipt:
         state.setdefault('progress' if outcome == 'progress' else 'observations', {})[attempt] = receipt
+        if outcome == 'progress':
+            state['workflow_progress'] = receipt['implementation']['workflow']
         runtime.kv_set(env.conn, env.name, package_diagnosis._key(plan, package), json.dumps(state))
         set_package_state(env.conn, env.name, plan, package, 'working', attempt)
         package_diagnosis.request(env, plan, package, cls)

@@ -31,6 +31,22 @@ def repair_spec(contract, previous=None):
         raise ValueError('implementation and regression files must be separate')
     if repair['criterion'] not in {c.get('id') for c in contract.get('criteria', [])}:
         raise ValueError('repair criterion must name a prescribed positive check')
+    workflow = contract.get('workflow')
+    if not isinstance(workflow, dict) or any(not text(workflow.get(k)) for k in ('entrypoint', 'command')):
+        raise ValueError('repair requires a complete workflow with its real entrypoint and focused command')
+    checkpoints = workflow.get('checkpoints')
+    if (not isinstance(checkpoints, list) or not checkpoints or any(not text(v) for v in checkpoints)
+            or len(set(checkpoints)) != len(checkpoints)):
+        raise ValueError('workflow requires fixed unique completion checkpoints')
+    paths = workflow.get('regression_paths')
+    if not isinstance(paths, list) or not paths or any(v not in repair['regression_paths'] for v in paths):
+        raise ValueError('workflow regressions must be included in the protected regression files')
+    advances = repair.get('advances')
+    if not isinstance(advances, list) or not advances or any(v not in checkpoints for v in advances):
+        raise ValueError('repair must advance named workflow checkpoints, not only a standalone component')
+    old_workflow = ((previous or {}).get('contract') or {}).get('workflow')
+    if old_workflow and workflow != old_workflow:
+        raise ValueError('retain the complete workflow and checkpoints across follow-ups')
     return repair
 
 
@@ -77,7 +93,33 @@ def implementation_evidence(receipt, assigned, checkout):
         if git('hash-object', '--path=' + name, str((root / snapshot).resolve())).strip() != git('rev-parse', receipt['commit'] + ':' + name).strip():
             raise ValueError('regression assertions changed after the failing baseline')
         digests[name] = hashlib.sha256(contents).hexdigest()
-    receipt['implementation'] = dict(goal=repair['goal'], before=before, changed=sorted(changed),
+    workflow = assigned['contract']['workflow']
+    evidence = receipt.get('workflow')
+    if not isinstance(evidence, dict) or evidence.get('command') != workflow['command']:
+        raise ValueError('progress requires before and after evidence for the complete workflow')
+    def outcomes(name):
+        try:
+            result = json.loads(evidence_file(name))
+        except (ValueError, UnicodeError) as exc:
+            raise ValueError('workflow log must contain its structured checkpoint results') from exc
+        checks = result.get('checks') if isinstance(result, dict) else None
+        if (not isinstance(checks, dict) or set(checks) != set(workflow['checkpoints'])
+                or any(v not in ('passed', 'failed') for v in checks.values())
+                or type(result.get('exit')) is not int
+                or (result['exit'] == 0) != all(v == 'passed' for v in checks.values())):
+            raise ValueError('workflow evidence must cover every checkpoint with a consistent exit code')
+        return checks
+    initial, final = outcomes(evidence.get('before')), outcomes(evidence.get('after'))
+    prior = assigned.get('workflow_progress') or {}
+    for key, status in {**prior.get('checks', {}), **{k:v for k,v in initial.items() if v == 'passed'}}.items():
+        if status == 'passed' and (initial.get(key) != 'passed' or final.get(key) != 'passed'):
+            raise ValueError('repair regressed a previously passing workflow checkpoint')
+    if not any(initial[key] == 'failed' and final[key] == 'passed' for key in repair['advances']):
+        raise ValueError('standalone component changed but no required workflow checkpoint improved')
+    workflow_digests = {name: digests[name] for name in workflow['regression_paths']}
+    if prior and prior.get('regression_digests') != workflow_digests:
+        raise ValueError('workflow assertions changed between repair rounds')
+    receipt['implementation'] = dict(workflow=dict(checks=final, regression_digests=workflow_digests), goal=repair['goal'], before=before, changed=sorted(changed),
         baseline_digest=hashlib.sha256(log).hexdigest(), regression_digests=digests)
     return receipt
 
