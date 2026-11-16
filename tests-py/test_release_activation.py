@@ -24,12 +24,33 @@ class ReleaseActivationTests(unittest.TestCase):
             self.assertEqual(self.active(), '2.0.0')
             self.assertTrue(any(r['version'] == '1.0.0' for r in version_leases._load(self.root).values()))
             return True
-        self.assertTrue(release_activation.activate(self.root, '2.0.0', first_round))
+        self.assertTrue(release_activation.activate(self.root, '2.0.0', first_round, target_verifier=lambda: True))
         self.assertEqual(self.active(), '2.0.0')
         self.assertEqual(version_leases._load(self.root), {})
 
+    def test_mutated_candidate_is_rejected_at_publication(self):
+        candidate = self.root / 'versions' / '2.0.0' / 'haivequeen' / 'cli.py'
+        expected = candidate.read_bytes()
+        self.assertEqual(candidate.read_bytes(), expected)  # initial verification
+        candidate.write_text('changed', encoding='utf-8')
+        with self.assertRaisesRegex(RuntimeError, 'target verification failed'):
+            release_activation.activate(self.root, '2.0.0', lambda: self.fail('first round ran'),
+                                        target_verifier=lambda: candidate.read_bytes() == expected)
+        self.assertEqual(self.active(), '1.0.0')
+        self.assertEqual(version_leases._load(self.root), {})
+
+    def test_missing_or_raising_verifier_fails_closed(self):
+        with self.assertRaises(RuntimeError):
+            release_activation.activate(self.root, '2.0.0', lambda: True)
+        def fail_verification():
+            raise ValueError('verification failed')
+        with self.assertRaises(ValueError):
+            release_activation.activate(self.root, '2.0.0', lambda: True, target_verifier=fail_verification)
+        self.assertEqual(self.active(), '1.0.0')
+        self.assertEqual(version_leases._load(self.root), {})
+
     def test_failed_round_restores_old_pointer(self):
-        self.assertFalse(release_activation.activate(self.root, '2.0.0', lambda: False))
+        self.assertFalse(release_activation.activate(self.root, '2.0.0', lambda: False, target_verifier=lambda: True))
         self.assertEqual(self.active(), '1.0.0')
         self.assertEqual(version_leases._load(self.root), {})
 
@@ -37,7 +58,7 @@ class ReleaseActivationTests(unittest.TestCase):
         def fail():
             raise RuntimeError('round failed')
         with self.assertRaisesRegex(RuntimeError, 'round failed'):
-            release_activation.activate(self.root, '2.0.0', fail)
+            release_activation.activate(self.root, '2.0.0', fail, target_verifier=lambda: True)
         self.assertEqual(self.active(), '1.0.0')
 
 

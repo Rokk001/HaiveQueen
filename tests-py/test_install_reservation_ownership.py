@@ -21,7 +21,7 @@ class ReservationOwnershipTests(unittest.TestCase):
             other = 'install-other'
             leases[other] = dict(leases[owned])
             version_leases._save(root, leases)
-            self.assertTrue(release_activation.activate(root, '2.0.0', lambda: True, installation_token=owned))
+            self.assertTrue(release_activation.activate(root, '2.0.0', lambda: True, installation_token=owned, target_verifier=lambda: True))
             leases = version_leases._load(root)
             self.assertNotIn(owned, leases)
             self.assertIn(other, leases)
@@ -35,7 +35,7 @@ class ReservationOwnershipTests(unittest.TestCase):
             version_layout.set_active(root, '1.0.0', installation_token=old)
             _, owned = release_staging.stage_release(root, 'example/project', '2.0.0', fetch, return_token=True)
             with self.assertRaises(ValueError):
-                release_activation.activate(root, '2.0.0', lambda: True, installation_token='invalid')
+                release_activation.activate(root, '2.0.0', lambda: True, installation_token='invalid', target_verifier=lambda: True)
             self.assertIn(owned, version_leases._load(root))
             self.assertEqual(Path(root, 'active-version').read_text().strip(), '1.0.0')
 
@@ -50,7 +50,7 @@ class ReservationOwnershipTests(unittest.TestCase):
             leases = version_leases._load(root)
             leases['install-other'] = dict(leases[owned])
             version_leases._save(root, leases)
-            self.assertFalse(release_activation.activate(root, '2.0.0', lambda: False, installation_token=owned))
+            self.assertFalse(release_activation.activate(root, '2.0.0', lambda: False, installation_token=owned, target_verifier=lambda: True))
             self.assertEqual(Path(root, 'active-version').read_text().strip(), '1.0.0')
             leases = version_leases._load(root)
             self.assertNotIn(owned, leases)

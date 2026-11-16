@@ -5,16 +5,22 @@ from . import version_layout, version_leases
 from .stable_launcher import lifetime_lock
 
 
-def activate(root, version, first_round, after_rollback=None, installation_token=None):
+def activate(root, version, first_round, after_rollback=None, installation_token=None,
+             target_verifier=None):
     """Switch the pointer and restore it if the successor fails its first round.
 
     The caller must establish compatibility before calling and ensure that
-    first_round checks the successor, not an earlier core. The old version is
+    first_round checks the successor, not an earlier core. target_verifier must
+    independently verify the candidate immediately before publication under the
+    lifetime lock; missing, false, or failing verification prevents activation.
+    The old version is
     reserved until the result is known so collection cannot remove rollback.
     Exceptions from first_round trigger rollback and are propagated.
     """
     root = Path(root)
     with lifetime_lock(root):
+        if target_verifier is None or target_verifier() is not True:
+            raise RuntimeError('target verification failed')
         old = (root / 'active-version').read_text(encoding='utf-8').strip()
         token = version_leases._reserve_locked(root, old)
         try:

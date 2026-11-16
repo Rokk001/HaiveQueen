@@ -469,11 +469,9 @@ def run_release_update(conn, root, version, sleep=time.sleep, poll=5.0,
                                        sleep, poll, timeout, loop_pid=loop_pid)
         if not release_staging.verify_installed(target, repository, version):
             raise RuntimeError('installed release changed before activation')
-        if installation_token is None:
-            passed = activate(root, version, first_round, after_rollback=recover_old)
-        else:
-            passed = activate(root, version, first_round, after_rollback=recover_old,
-                              installation_token=installation_token)
+        passed = activate(root, version, first_round, after_rollback=recover_old,
+                          installation_token=installation_token,
+                          target_verifier=lambda: release_staging.verify_installed(target, repository, version))
         if passed:
             result, note = 'ok', 'updated to version ' + version
         else:
