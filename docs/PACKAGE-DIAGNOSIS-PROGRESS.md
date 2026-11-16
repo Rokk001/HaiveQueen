@@ -70,7 +70,7 @@ genuine product or external prerequisites retain their existing question path.
 Unrelated packages remain runnable.
 
 Only follow-up diagnoses load `roles/package-continuation.md`, through
-`package_diagnosis.prompt` and `roles.role_text`. Queens and ordinary Bees do not
+`package_diagnosis.prompt` and `roles.role_text`. Queens and ordinary Agents do not
 receive this protocol text. Repair agents receive the resulting bounded task,
 with evidence references, rather than a copied investigation history.
 
