@@ -389,8 +389,10 @@ window.addEventListener('load', async () => {
 
     await click('Questions');await wait(()=>document.querySelector('[data-question]'));
 
-    assert(document.querySelector('[data-question] .copy-output'),'Textarea copy control missing');
-    const answer=document.querySelector('[data-question] textarea');answer.value='Proceed';
+    const answer=document.querySelector('[data-question] textarea');
+    assert(answer.getAttribute('data-copy')==='off','Answer composer must opt out of output copy controls');
+    assert(!document.querySelector('[data-question] .copy-output'),'Answer composer must remain undecorated');
+    answer.value='Proceed';
 
     await click('Answer');
 

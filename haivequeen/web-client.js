@@ -530,6 +530,7 @@ function mount(document, bootstrap) {
   const collapsedHives=new Set();
   let generation=0, logCleared=0, logFilter='', showNoise=false, logFollow=true, selectedPlan='', selectedAgent='';
   const liveRuns=new Map(), loginRuns=new Map(), jobs=new Map();
+  let ownerHistory=null;
   const view=$('app');
   $('detail').addEventListener('close',()=>{overlay=null;liveRuns.delete('detail');$('detail').classList.remove('entity-dialog');});
   const actions={start:'Start','stop-gracefully':'Stop gracefully','force-stop':'Force stop',resume:'Resume',cancel:'Cancel plan','back-to-draft':'Back to draft'};
@@ -1092,6 +1093,7 @@ function mount(document, bootstrap) {
     box.append(bar);const lines=el('pre',undefined,'log');box.append(lines);
     function drawLog(){lines.textContent=logRows().map(row=>row.join(' ')).join('\n');if(logFollow)lines.scrollTop=lines.scrollHeight;}
     drawLog();
+    if(ownerHistory?.children.length>1)view.append(ownerHistory);
   }
   function planDocument(text) {
     const doc=el('div',undefined,'plan-document');
@@ -1985,7 +1987,7 @@ function mount(document, bootstrap) {
     panel.querySelector('input').disabled=!run.running;panel.querySelector('form button').disabled=!run.running;
     if(!run.running){links.append(el('p',t('Login finished')+' ('+run.exit+')'));panel.append(button('Close',()=>{panel.remove();loginRuns.delete(run.id);}));}
   }
-  function renderJob(job,historical=false) {
+  function renderJob(job,historical=false,history=null) {
     if(job.key?.startsWith('release-promotion:') && (!historical || job.running || job.result?.pending)){
       const project=job.key.slice('release-promotion:'.length),previous=releasePromotions.get(project);
       if(!previous||previous.id===job.id||Number(job.started)>=Number(previous.started)){
@@ -1996,7 +1998,8 @@ function mount(document, bootstrap) {
       }
       return;
     }
-    let panel=$('job-'+job.id);if(!panel){panel=el('section');panel.id='job-'+job.id;$('live').append(panel);}
+    if(historical&&!job.running&&!history)return;
+    let panel=$('job-'+job.id);if(!panel){panel=el('section');panel.id='job-'+job.id;(historical&&!job.running?history:$('live')).append(panel);}
     panel.className='owner-action-summary';
     const [kind,...parts]=String(job.key||'').split(':'),project=parts.join(':');
     const label=({'release-promotion':'Release publication',mcp:'Provider setup',benchmark:'Provider benchmark',tools:'Tool installation'})[kind]||'Owner action';
@@ -2052,8 +2055,9 @@ function mount(document, bootstrap) {
   render();
   void client.request('jobs/status').then(history=>{
     const previous=el('details');previous.append(el('summary',t('Previous owner actions')));
-    for(const job of history){if(!jobs.has(job.id)){jobs.set(job.id,job);renderJob(job,true);if(!job.running && $('job-'+job.id))previous.append($('job-'+job.id));}}
-    if(previous.children.length>1)$('live').append(previous);
+    for(const job of history){if(!jobs.has(job.id)){jobs.set(job.id,job);renderJob(job,true,previous);}}
+    ownerHistory=previous;
+    if(tab==='Logs')render();
   }).catch(error=>client.notice(error.message,true));
   void tick();setInterval(()=>void tick(),2000);
   return client;
