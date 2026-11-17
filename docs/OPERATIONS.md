@@ -122,8 +122,29 @@ that agent, and with them the agents the loop had started (observed on 2026-11-1
 loop, web service and a diagnosis Agent ended when a Codex Queen ended, and nothing
 ran until the next manual start). `bzz start` and the web service therefore start
 their processes with `CREATE_BREAKAWAY_FROM_JOB`; a job that forbids breakaway
-refuses the flag and the process starts as before.
-Focused regression: `python -m unittest discover -s tests-py -p test_outside_agent_job.py -v`.
+refuses the flag and the process starts as before. Such a start also gets its own
+console supervisor started outside the job (see below): Windows ends the processes of a
+debugger together with it, so a supervisor left inside the job would end the loop anyway.
+Focused regressions: `python -m unittest discover -s tests-py -p test_outside_agent_job.py -v` and
+`test_shared_console_broker.py` (a real job whose end must not end a detached start).
+
+## Program starts on Windows
+
+Every program HaiveQueen starts on Windows runs under its console supervisor
+(`haivequeen/console_tree.py`), so neither it nor its descendants open a console
+window. One supervisor per HaiveQueen process serves all ordinary starts; the handles a
+program inherits are duplicated into it. A start that inherits every inheritable handle,
+or leaves the caller's job, gets a supervisor of its own. A supervisor keeps supervising
+running trees after its caller ended and ends with the last of them.
+
+Starting a separate supervisor for every program made Windows the slow platform
+(CI run 43955634430: Windows 5,035 s, Ubuntu 739 s for the same 3,442 tests; about
+2,900 tests that take under 0.2 s on Ubuntu took 1,833 s together on Windows, and in
+`test_hives_h2` 130 of 143 s went to 509 program starts). Measured on one machine, a
+`git --version` start took 15 ms without supervision, 220 ms with a supervisor per
+start and 41 ms with the shared supervisor; `test_hives_h2` (73 tests) went from 95 s to 42 s.
+The remaining difference to Ubuntu comes from supervision itself and from Windows process
+starts; the comparison after integration uses the timings of the next CI run.
 
 ## Waits of a Queen for her subagents
 

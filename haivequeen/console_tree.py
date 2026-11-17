@@ -21,6 +21,7 @@ import pickle
 import struct
 import subprocess
 import sys
+import threading
 
 
 class _CreateProcess(c.Structure):
@@ -97,6 +98,10 @@ class _Debugger:
         self.initial_breaks = set()
         self.saved = {}
         self.stepping = {}
+        self.expected = set()   # created roots whose creation event has not arrived yet
+
+    def busy(self):
+        return bool(self.processes or self.expected)
 
     def check(self, result):
         if not result:
@@ -237,48 +242,58 @@ class _Debugger:
         return 0x10002
 
     def run(self):
-        k = self.kernel
         while True:
-            event = _Event()
-            self.check(k.WaitForDebugEvent(c.byref(event), 0xffffffff))
-            code, pid, tid = event.code, event.pid, event.tid
-            status = 0x10002
-            info = event.data.create
-            if code == 3:
-                self.processes[pid] = info.process
-                pe = int.from_bytes(self.read(info.process, info.base + 0x3c, 4), 'little')
-                machine = int.from_bytes(self.read(info.process, info.base + pe + 4, 2), 'little')
-                if machine not in (0x14c, 0x8664):
-                    raise OSError('Unsupported console policy machine: %x' % machine)
-                self.bits[pid] = 64 if machine == 0x8664 else 32
-                self.threads[pid, tid] = info.thread
+            self.step(INFINITE)
+            if not self.busy():
+                return
+
+    def step(self, timeout):
+        """Handle one debug event; False when none arrived within the timeout in milliseconds."""
+        k = self.kernel
+        event = _Event()
+        if not k.WaitForDebugEvent(c.byref(event), timeout):
+            error = c.get_last_error()
+            if error == 121:  # ERROR_SEM_TIMEOUT
+                return False
+            raise c.WinError(error)
+        code, pid, tid = event.code, event.pid, event.tid
+        status = 0x10002
+        info = event.data.create
+        if code == 3:
+            self.expected.discard(pid)
+            self.processes[pid] = info.process
+            pe = int.from_bytes(self.read(info.process, info.base + 0x3c, 4), 'little')
+            machine = int.from_bytes(self.read(info.process, info.base + pe + 4, 2), 'little')
+            if machine not in (0x14c, 0x8664):
+                raise OSError('Unsupported console policy machine: %x' % machine)
+            self.bits[pid] = 64 if machine == 0x8664 else 32
+            self.threads[pid, tid] = info.thread
+            if info.file:
+                k.CloseHandle(info.file)
+        elif code == 2:
+            self.threads[pid, tid] = info.file  # first member is hThread
+        elif code == 4:
+            self.threads.pop((pid, tid), None)
+        elif code == 5:
+            self.processes.pop(pid, None)
+            self.targets.pop(pid, None)
+            self.bits.pop(pid, None)
+            self.initial_breaks = {key for key in self.initial_breaks if key[0] != pid}
+            self.saved = {key: value for key, value in self.saved.items() if key[0] != pid}
+            self.stepping.pop(pid, None)
+            for key in list(self.threads):
+                if key[0] == pid:
+                    self.threads.pop(key)
+        elif code == 6:
+            try:
+                self.loaded(pid, info.file, info.process)  # LOAD_DLL: hFile, lpBaseOfDll
+            finally:
                 if info.file:
                     k.CloseHandle(info.file)
-            elif code == 2:
-                self.threads[pid, tid] = info.file  # first member is hThread
-            elif code == 4:
-                self.threads.pop((pid, tid), None)
-            elif code == 5:
-                self.processes.pop(pid, None)
-                self.targets.pop(pid, None)
-                self.bits.pop(pid, None)
-                self.initial_breaks = {key for key in self.initial_breaks if key[0] != pid}
-                self.saved = {key: value for key, value in self.saved.items() if key[0] != pid}
-                self.stepping.pop(pid, None)
-                for key in list(self.threads):
-                    if key[0] == pid:
-                        self.threads.pop(key)
-            elif code == 6:
-                try:
-                    self.loaded(pid, info.file, info.process)  # LOAD_DLL: hFile, lpBaseOfDll
-                finally:
-                    if info.file:
-                        k.CloseHandle(info.file)
-            elif code == 1:
-                status = self.exception(event)
-            self.check(k.ContinueDebugEvent(pid, tid, status))
-            if not self.processes:
-                return
+        elif code == 1:
+            status = self.exception(event)
+        self.check(k.ContinueDebugEvent(pid, tid, status))
+        return True
 
     def abort(self):
         """An enforcement error must not leave a suspended or unprotected tool."""
@@ -287,66 +302,203 @@ class _Debugger:
             self.kernel.DebugActiveProcessStop(pid)
 
 
-def _receive(stream):
-    header = stream.read(4)
-    if len(header) != 4:
-        raise OSError('Console supervisor ended before responding')
-    size = struct.unpack('<I', header)[0]
-    payload = stream.read(size)
-    if len(payload) != size:
-        raise OSError('Incomplete console supervisor response')
+INFINITE = 0xffffffff
+SERVE_POLL_MS = 10            # how long a busy broker waits for a debug event before it looks for the next request
+BREAKAWAY = 0x01000000        # CREATE_BREAKAWAY_FROM_JOB
+BROKER_FLAGS = 0x08000208     # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+
+
+class _NotDelivered(OSError):
+    """The request never reached the broker, so no process was created: a new broker may take it."""
+
+
+def _read_exact(handle, size):
+    import _winapi
+    data = b''
+    while len(data) < size:
+        chunk, _error = _winapi.ReadFile(handle, size - len(data))
+        if not chunk:
+            raise OSError('Console supervisor pipe closed')
+        data += chunk
+    return data
+
+
+def _receive(handle):
+    try:
+        size = struct.unpack('<I', _read_exact(handle, 4))[0]
+        payload = _read_exact(handle, size)
+    except OSError as exc:
+        raise OSError('Console supervisor ended before responding') from exc
     return pickle.loads(payload)
 
 
-def _send(stream, value):
-    payload = pickle.dumps(value)
-    stream.write(struct.pack('<I', len(payload)))
-    stream.write(payload)
-    stream.flush()
+def _send(handle, value):
+    import _winapi
+    data = pickle.dumps(value)
+    data = struct.pack('<I', len(data)) + data
+    while data:
+        written, _error = _winapi.WriteFile(handle, data)
+        if not written:
+            raise OSError('Console supervisor pipe closed')
+        data = data[written:]
+
+
+def _waiting(handle):
+    """True when a request (or the end of the request pipe) is ready to be read."""
+    import _winapi
+    try:
+        return _winapi.PeekNamedPipe(handle, 0)[0] > 0
+    except OSError:
+        return True
+
+
+def _launch(original, request_read, reply_write, inherited, breakaway):
+    """Start a broker process that inherits only the protocol pipes and the given handles (None: all inheritable)."""
+    import _winapi
+    startup = subprocess.STARTUPINFO()
+    if inherited is not None:
+        startup.lpAttributeList = {'handle_list': list(set(list(inherited) + [request_read, reply_write]))}
+    executable = Path(sys.executable).with_name('pythonw.exe')
+    if not executable.exists():
+        executable = Path(sys.executable)
+    command = subprocess.list2cmdline([str(executable), '-I', str(Path(__file__).resolve()),
+                                       str(request_read), str(reply_write), str(os.getpid())])
+    broker_cwd = os.path.abspath(os.sep)
+    try:
+        # A tree that leaves the caller's job needs a broker outside it too: when the job ends,
+        # Windows ends a debugger's processes with it.
+        broker, thread, _pid, _tid = original(None, command, None, None, True, BROKER_FLAGS | (BREAKAWAY if breakaway else 0),
+                                             None, broker_cwd, startup)
+    except OSError:
+        if not breakaway:
+            raise
+        broker, thread, _pid, _tid = original(None, command, None, None, True, BROKER_FLAGS, None, broker_cwd, startup)
+    _winapi.CloseHandle(thread)
+    return broker
+
+
+class _Broker:
+    """One supervisor serves every ordinary creation of this caller, so a start costs no extra interpreter."""
+
+    def __init__(self, original):
+        import _winapi
+        request_read, self.request = _winapi.CreatePipe(None, 0)
+        self.reply, reply_write = _winapi.CreatePipe(None, 0)
+        try:
+            os.set_handle_inheritable(request_read, True)
+            os.set_handle_inheritable(reply_write, True)
+            self.process = _launch(original, request_read, reply_write, [], False)
+        except BaseException:
+            for handle in (self.request, self.reply):
+                _winapi.CloseHandle(handle)
+            raise
+        finally:
+            for handle in (request_read, reply_write):
+                _winapi.CloseHandle(handle)
+
+    def alive(self):
+        import _winapi
+        return _winapi.WaitForSingleObject(self.process, 0) == 0x102  # WAIT_TIMEOUT
+
+    def close(self):
+        """Release this caller's ends; the broker keeps supervising its running trees and then ends."""
+        import _winapi
+        for handle in (self.request, self.reply, self.process):
+            try:
+                _winapi.CloseHandle(handle)
+            except OSError:
+                pass
+
+    def transfer(self, info):
+        """The handles the command inherits, duplicated into the broker; it closes them after the creation."""
+        import _winapi
+        current, moved = _winapi.GetCurrentProcess(), {}
+
+        def move(handle):
+            if handle in (None, 0, -1):
+                return handle
+            if int(handle) not in moved:
+                moved[int(handle)] = _winapi.DuplicateHandle(current, int(handle), self.process, 0, True, 2)
+            return moved[int(handle)]
+        attributes = dict(getattr(info, 'lpAttributeList', None) or {})
+        attributes['handle_list'] = [move(handle) for handle in attributes.get('handle_list', ())]
+        uses_std = info.dwFlags & 0x100  # STARTF_USESTDHANDLES
+        return subprocess.STARTUPINFO(
+            dwFlags=info.dwFlags, wShowWindow=info.wShowWindow, lpAttributeList=attributes,
+            hStdInput=move(info.hStdInput) if uses_std else info.hStdInput,
+            hStdOutput=move(info.hStdOutput) if uses_std else info.hStdOutput,
+            hStdError=move(info.hStdError) if uses_std else info.hStdError)
+
+    def create(self, args):
+        args = list(args)
+        try:
+            if not self.alive():
+                raise OSError('Console supervisor ended')
+            if args[4]:
+                args[8] = self.transfer(args[8])
+            _send(self.request, (args, os.getcwd()))
+        except OSError as exc:
+            raise _NotDelivered(str(exc)) from exc
+        value = _receive(self.reply)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+
+_shared = {}
+_lock = threading.Lock()
 
 
 def create_process(original, args):
     """An independent supervisor keeps detached trees protected after caller exit.
 
-    Only inherited anonymous pipes carry the request and reply. Process/thread
-    handles are duplicated back to the caller, so Popen still owns the actual
-    command's PID, exit status, termination and redirected streams.
+    One broker per caller serves every ordinary creation over private anonymous
+    pipes; the handles a command inherits are duplicated into it. A command that
+    inherits every inheritable handle, or leaves the caller's job, gets a broker
+    of its own. Process/thread handles are duplicated back to the caller, so
+    Popen still owns the actual command's PID, exit status, termination and
+    redirected streams.
     """
+    attributes = getattr(args[8], 'lpAttributeList', None) or {}
+    # subprocess always sets a handle_list; an empty one with inheritance means every inheritable handle.
+    if args[4] and not attributes.get('handle_list') or (args[5] or 0) & BREAKAWAY:
+        return _create_once(original, args)
+    with _lock:
+        broker = _shared.get('broker')
+        for attempt in range(2):
+            if broker is None:
+                broker = _shared['broker'] = _Broker(original)
+            try:
+                return broker.create(args)
+            except _NotDelivered:
+                broker.close()
+                broker = _shared['broker'] = None
+                if attempt:
+                    raise
+
+
+def _create_once(original, args):
+    """A broker for one command: it inherits what that command inherits."""
     import _winapi
-    import msvcrt
     request_read, request_write = _winapi.CreatePipe(None, 0)
     reply_read, reply_write = _winapi.CreatePipe(None, 0)
     owned = {request_read, request_write, reply_read, reply_write}
     try:
         os.set_handle_inheritable(request_read, True)
         os.set_handle_inheritable(reply_write, True)
-        startup = subprocess.STARTUPINFO()
         attributes = getattr(args[8], 'lpAttributeList', None)
-        if not args[4] or attributes and 'handle_list' in attributes:
+        inherited = None
+        if not args[4] or attributes and attributes.get('handle_list'):
             inherited = list(attributes.get('handle_list', ())) if args[4] and attributes else []
-            startup.lpAttributeList = {'handle_list': list(set(inherited + [request_read, reply_write]))}
-        executable = Path(sys.executable).with_name('pythonw.exe')
-        if not executable.exists():
-            executable = Path(sys.executable)
-        command = subprocess.list2cmdline([str(executable), '-I', str(Path(__file__).resolve()),
-                                           str(request_read), str(reply_write), str(os.getpid())])
-        caller_cwd = os.getcwd()
-        broker_cwd = os.path.abspath(os.sep)
-        broker, thread, _pid, _tid = original(None, command, None, None, True, 0x08000208,
-                                             None, broker_cwd, startup)
-        _winapi.CloseHandle(thread)
+        broker = _launch(original, request_read, reply_write, inherited, bool((args[5] or 0) & BREAKAWAY))
         _winapi.CloseHandle(broker)
         for handle in (request_read, reply_write):
             _winapi.CloseHandle(handle)
             owned.remove(handle)
-        request_fd = msvcrt.open_osfhandle(request_write, os.O_WRONLY | os.O_BINARY)
+        _send(request_write, (args, os.getcwd()))
+        _winapi.CloseHandle(request_write)   # one request only: the broker supervises and then ends
         owned.remove(request_write)
-        with os.fdopen(request_fd, 'wb') as stream:
-            _send(stream, (args, caller_cwd))
-        reply_fd = msvcrt.open_osfhandle(reply_read, os.O_RDONLY | os.O_BINARY)
-        owned.remove(reply_read)
-        with os.fdopen(reply_fd, 'rb') as stream:
-            value = _receive(stream)
+        value = _receive(reply_read)
         if isinstance(value, BaseException):
             raise value
         return value
@@ -355,56 +507,78 @@ def create_process(original, args):
             _winapi.CloseHandle(handle)
 
 
-def _supervise(request, reply, parent_pid):
+def _start(debugger, args, caller_cwd, parent_pid):
+    """Create one requested command under the debugger; its process and thread handles go to the caller."""
     import _winapi
-    import msvcrt
-    # Do not let the actual tool inherit the private supervisor protocol.
+    args = list(args)
+    args[5] |= 1  # DEBUG_PROCESS receives every native descendant
+    inherited = set()
+    if args[4]:
+        info = args[8]
+        attributes = getattr(info, 'lpAttributeList', None) or {}
+        inherited = set(attributes.get('handle_list', ()))
+        inherited.update(getattr(info, name, None) for name in ('hStdInput', 'hStdOutput', 'hStdError'))
+    try:
+        # Preserve CreateProcess path resolution and inherited cwd without
+        # retaining the caller directory for the lifetime of the tree.
+        broker_cwd = os.getcwd()
+        try:
+            os.chdir(caller_cwd)
+            try:
+                process, thread, pid, tid = _winapi.CreateProcess(*args)
+            except PermissionError:
+                if not args[5] & BREAKAWAY:
+                    raise
+                # A broker started outside the caller's job is refused the flag; the command
+                # then belongs where this broker belongs, which is what the flag asked for.
+                args[5] &= ~BREAKAWAY
+                process, thread, pid, tid = _winapi.CreateProcess(*args)
+        finally:
+            os.chdir(broker_cwd)
+    finally:
+        # The tool owns these inherited handles now. Keeping pipe writers
+        # here would make communicate() wait for unrelated detached leaves.
+        for handle in inherited - {None, 0, -1}:
+            try:
+                _winapi.CloseHandle(handle)
+            except OSError:
+                pass
+    debugger.expected.add(pid)
+    parent = _winapi.OpenProcess(0x40, False, parent_pid)  # PROCESS_DUP_HANDLE
+    try:
+        current = _winapi.GetCurrentProcess()
+        return tuple(_winapi.DuplicateHandle(current, h, parent, 0, False, 2) for h in (process, thread)) + (pid, tid)
+    finally:
+        _winapi.CloseHandle(parent)
+        _winapi.CloseHandle(process)
+        _winapi.CloseHandle(thread)
+
+
+def _serve(request, reply, parent_pid):
+    """Create requested commands and supervise their trees; end once the caller is gone and every tree has ended."""
+    # Do not let the actual tools inherit the private supervisor protocol.
     os.set_handle_inheritable(request, False)
     os.set_handle_inheritable(reply, False)
     debugger = _Debugger()
-    reply_fd = msvcrt.open_osfhandle(reply, os.O_WRONLY | os.O_BINARY)
-    with os.fdopen(reply_fd, 'wb') as output:
-        try:
-            request_fd = msvcrt.open_osfhandle(request, os.O_RDONLY | os.O_BINARY)
-            with os.fdopen(request_fd, 'rb') as source:
-                args, caller_cwd = _receive(source)
-                args = list(args)
-            args[5] |= 1  # DEBUG_PROCESS receives every native descendant
-            # Preserve CreateProcess path resolution and inherited cwd without
-            # retaining the caller directory for the lifetime of the tree.
-            broker_cwd = os.getcwd()
-            try:
-                os.chdir(caller_cwd)
-                process, thread, pid, tid = _winapi.CreateProcess(*args)
-            finally:
-                os.chdir(broker_cwd)
-            # The tool owns these inherited handles now. Keeping pipe writers
-            # here would make communicate() wait for unrelated detached leaves.
-            if args[4]:
-                info = args[8]
-                attributes = getattr(info, 'lpAttributeList', None) or {}
-                inherited = set(attributes.get('handle_list', ()))
-                inherited.update(getattr(info, name, None) for name in ('hStdInput', 'hStdOutput', 'hStdError'))
-                for handle in inherited - {None, 0, -1, request, reply}:
-                    try:
-                        _winapi.CloseHandle(handle)
-                    except OSError:
-                        pass
-            parent = _winapi.OpenProcess(0x40, False, parent_pid)  # PROCESS_DUP_HANDLE
-            try:
-                current = _winapi.GetCurrentProcess()
-                transferred = tuple(_winapi.DuplicateHandle(current, h, parent, 0, False, 2)
-                                    for h in (process, thread))
-            finally:
-                _winapi.CloseHandle(parent)
-                _winapi.CloseHandle(process)
-                _winapi.CloseHandle(thread)
-            _send(output, (*transferred, pid, tid))
-        except BaseException as exc:
-            _send(output, exc)
-            return
+    accepting = True
     try:
-        debugger.run()
+        while accepting or debugger.busy():
+            if accepting and (not debugger.busy() or _waiting(request)):
+                try:
+                    args, caller_cwd = _receive(request)
+                except (OSError, EOFError, pickle.UnpicklingError):
+                    accepting = False   # the caller has gone: finish supervising what runs
+                    continue
+                try:
+                    value = _start(debugger, args, caller_cwd, parent_pid)
+                except Exception as exc:
+                    value = exc
+                try:
+                    _send(reply, value)
+                except OSError:
+                    accepting = False
+            else:
+                debugger.step(SERVE_POLL_MS if accepting else INFINITE)
     except BaseException:
         # There is no parent stderr in pythonw; fail closed with exit status 127
         # on tools that cannot be supervised, rather than silently leaking a UI.
@@ -413,4 +587,4 @@ def _supervise(request, reply, parent_pid):
 
 
 if __name__ == '__main__':
-    _supervise(*(int(value) for value in sys.argv[1:]))
+    _serve(*(int(value) for value in sys.argv[1:]))
