@@ -118,6 +118,7 @@ Most day-to-day controls are also in the browser. Expand the reference for every
 | `bzz provider test` | Owner: test a local-model provider connection. |
 | `bzz integration acquire` | Acquire the integration place for a project. |
 | `bzz integration release` | Release the integration place for a project. |
+| `bzz integration runs` | Show the record of the latest complete test run per step of a plan. |
 | `bzz dequeen` | Owner: stop a plan's Queen and separate agents, leaving it queenless. |
 | `bzz requeen` | Owner: restart a plan Queen, optionally on another provider. |
 | `bzz done` | Agent: record the final result. |

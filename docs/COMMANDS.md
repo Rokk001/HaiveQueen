@@ -55,6 +55,7 @@ The inventory includes compatibility aliases. Required inputs are marked; option
 | `bzz integration` | `--project (required)`, `--plan (required)`, `--owner-pid` |
 | `bzz integration acquire` | `--project (required)`, `--plan (required)`, `--owner-pid` |
 | `bzz integration release` | `--project (required)`, `--plan (required)`, `--owner-pid` |
+| `bzz integration runs` | `--project (required)`, `--plan (required)`, `--owner-pid` |
 | `bzz dequeen` | `plan (required)` |
 | `bzz requeen` | `plan (required)`, `provider` |
 | `bzz done` | `--agent (required)`, `--result (required)` |
@@ -147,6 +148,7 @@ The inventory includes compatibility aliases. Required inputs are marked; option
 | `bzz agent start`, `bzz agent result`, `bzz agent wait` | Queen | start an Agent (a refused start answers `waiting` with a `reason`), record an attempt or wait for its provider; a failed result needs evidence (`--open-requirements` or `--error`) or `--blocked-by question\|build\|owner\|package\|provider` (a question also needs `--blocked-ref <id>`), which is no failure and sets the package to waiting |
 | `bzz package --project p --plan f --package id --state working\|waiting\|implemented\|done\|rejected [--reason ...]` | Queen | report the progress of a package; `waiting` needs `--reason` (`question:<id>`, `build`, `owner`, `package` or `provider`); the dashboard progress bar counts the done ones |
 | `bzz integration acquire` / `release` | runtime compatibility | coordinate the per-project integration place for runtime compatibility; an external caller supplies a stable owner process id. This is not permission for Queens to integrate |
+| `bzz integration runs` | everyone, read-only | print the record of the latest complete test run of the plan per step (Check, Build) as JSON: reason, step, command, commit, configuration digest, start, end, duration, result (`passed`, `product-failure`, `infrastructure`), failure text and check report key. See [Complete test runs](OPERATIONS.md#complete-test-runs) |
 | `bzz update [--install X]` | owner | check GitHub for a newer release now, or install the offered release X (see [Updates](OPERATIONS.md#updates)) |
 | `bzz self-update` | owner | one-time transition to the release updates only: for a HaiveQueen checkout that is itself a project named HaiveQueen, waits until all agents have ended, then fast-forwards its `main` from `origin/<integrationBranch>` of that project's settings (default `main`); refused once a release was published for that project or the checkout is at a release tag – then use `bzz update` |
 | `bzz done`, `bzz ready`, `bzz ask`, `bzz note` | agents | final report, branch ready for integration, question, note ([runtime API](RUNTIME-API.md)) |

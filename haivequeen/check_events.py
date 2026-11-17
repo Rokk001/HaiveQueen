@@ -21,6 +21,23 @@ def report(event, **fields):
         os.fsync(stream.fileno())
 
 
+CAUSES = ('product', 'infrastructure')
+# Failures that say nothing about the checked product: the reporting protocol and the frozen checkout.
+INFRASTRUCTURE_FAILURES = ('protocol', 'provenance')
+
+
+def infrastructure_only(report):
+    """True when every failure of a finished report is the test environment's, not the product's.
+
+    A bare nonzero command exit accompanies any failure and decides nothing by itself."""
+    failures = report.get('failures', {})
+    environment = set(INFRASTRUCTURE_FAILURES) | set(report.get('infrastructure', []))
+    lost = bool(report.get('lost'))   # the worker vanished: checks it left unfinished are its consequence
+    product = {name for name, text in failures.items() if name not in environment and name != 'command'
+               and not (lost and str(text).startswith('no final result'))}
+    return (lost or bool(set(failures) & environment)) and not product
+
+
 def consume(job):
     """Read complete records only; retain a failure even if later records say pass."""
     try:
@@ -71,11 +88,15 @@ def _consume(job):
                         raise ValueError('invalid check result')
                     if name in state['results']:
                         raise ValueError('a final check result cannot be replaced')
+                    if row.get('cause', 'product') not in CAUSES:
+                        raise ValueError('a check result cause must be product or infrastructure')
                     state['attempts'].append(row)
                     if row['final']:
                         state['results'][name] = row
                         if code:
                             state['failures'][name] = 'exit %s' % code
+                            if row.get('cause') == 'infrastructure':
+                                state.setdefault('infrastructure', []).append(name)
                 elif event == 'shared_writes_finished':
                     state['shared_writes_finished'] = True
                 else:

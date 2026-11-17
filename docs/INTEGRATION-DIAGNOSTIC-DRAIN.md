@@ -39,6 +39,12 @@ report('shared_writes_finished')
 # Continue menu and load; never omit them because compile was red.
 ```
 
+A final failure caused by the test environment rather than the product (for example a
+missing tool or service the check needs) carries `cause='infrastructure'`; the default is
+`product`, other values are a reporting failure. A run whose failures are all of the
+environment is reported as a finding and starts no repair (see
+[Complete test runs](OPERATIONS.md#complete-test-runs)).
+
 Declare the complete required check list once. Optional probes must not appear in
 that list. Each result records the real exit code and complete output or its
 durable log references. A retry attempt is `final=False`; a final result is

@@ -33,6 +33,8 @@ LAST_KEY = "orch-last:"    # + plan: what the last pipeline did (commit, steps, 
 ATTEMPTS_KEY = "orch-fix:"  # + plan: {cls, n}: the fix attempts of the plan in the current class (the escalation as for Agents)
 STEPS = ("Merge", "Check", "Build", "Push", "Deploy", "Release")   # the chain shown to the owner; Close follows the last one
 COMMAND_STEPS = ("Check", "Build", "Deploy")
+RUN_STEPS = ("Check", "Build")   # complete test runs: each keeps a run record and never repeats with unchanged inputs
+RUN_KEY = "orch-run:"      # + plan + ":" + step: the record of the latest completed run of that step
 SETTING = {"Check": "compileCheck", "Build": "buildCommand", "Deploy": "deployCommand"}
 MOVED_LIMIT = 3            # how often a moved remote sends the pipeline back to step 1 before a fix agent looks at it
 ASYNC = None               # None: commands run in a thread unless BZZ_TEST_NOSTART is set (tests run them inline)
@@ -525,6 +527,7 @@ def _done(conn, env, plan, state, step, text=""):
         runtime.kv_set(conn, env.name, ATTEMPTS_KEY + plan, json.dumps(attempts))
         state.pop('repair_pending_step', None)
     _finish_log(state, 0, message=text)
+    _record_run(conn, env, plan, state, step, 'passed')
     state["steps"][step] = "done"
     if step not in state["ran"]:
         state["ran"].append(step)
@@ -903,6 +906,12 @@ def _command(conn, env, plan, state, folder, step, free_mb):
         head = integration.head_commit(folder)
         if step == "Deploy" and head and state.get("deployed") == head:
             return _done(conn, env, plan, state, step, "already deployed")
+        run = None
+        state.pop('run', None)   # a run left by an interrupted job has no verdict
+        if step in RUN_STEPS:
+            run, reuse = _plan_run(conn, env, plan, step, folder, head)
+            if reuse:
+                return reuse(conn, env, plan, state, step)
         with buildjobs.reservation_guard():
             extra = planned = None
             if step in ("Build", "Deploy"):
@@ -925,6 +934,10 @@ def _command(conn, env, plan, state, folder, step, free_mb):
             JOBS[key] = j
             state["job"] = {"step": step, "token": token, "file": str(result_file), "pid": None, "head": head}
             state['job'].update(check_events=str(result_file) + '.checks.jsonl', check_run=token, cwd=str(folder))
+            if run:
+                state['run'] = dict(run, run=token)
+            else:
+                state.pop('run', None)
             check_environment = check_events.environment(state['job']['check_events'], token, head)
             extra = {**(extra or {}), **check_environment}
             if planned:
@@ -969,6 +982,7 @@ def _command(conn, env, plan, state, folder, step, free_mb):
     if result == 'lost' and step == 'Deploy':
         state.pop('job', None)
         return _uncertain_deploy(conn, env, plan, state)
+    lost = result == 'lost'
     if result == 'lost' and instrumented:
         result = (143, 'worker ended without a completion result')
     if result == "lost":
@@ -979,6 +993,8 @@ def _command(conn, env, plan, state, folder, step, free_mb):
     code, output = result
     if instrumented:
         report = check_events.finish(state['job'], code, output)
+        if lost:
+            report['lost'] = True
         reason = check_events.verify(state['job'], folder, integration.head_commit(folder))
         if reason:
             report['failures']['provenance'] = reason
@@ -986,6 +1002,9 @@ def _command(conn, env, plan, state, folder, step, free_mb):
         if report['failures']:
             code = code or 1
             output = _check_failure_text(report)
+            _mark_run(state, step, infrastructure=check_events.infrastructure_only(report))
+        elif isinstance((report.get('suite') or {}).get('artifacts'), dict):
+            _mark_run(state, step, artifacts=report['suite']['artifacts'])
     job = state.pop("job", None) or {}
     JOBS.pop(key, None)
     if code != 0:
@@ -1071,10 +1090,13 @@ def _drain_checks(conn, env, plan, state):
     code, output = (143, 'worker ended without a completion result') if result == 'lost' else result
     job = state['job']
     report = check_events.finish(job, code, output)
+    if result == 'lost':
+        report['lost'] = True
     reason = check_events.verify(job, job['cwd'], integration.head_commit(job['cwd']))
     if reason:
         report['failures']['provenance'] = reason
     _save_check_report(conn, env, plan, state, report)
+    _mark_run(state, job['step'], infrastructure=check_events.infrastructure_only(report))
     state.pop('job')
     JOBS.pop((env.name, plan), None)
     # Even an exit 0 cannot undo a final required failure from this run.
@@ -1147,6 +1169,10 @@ def _harvest_only(conn, env, plan, state):
         return
     job = state.pop("job")
     step = job["step"]
+    if result != "lost":
+        # A completed verdict is kept, so the resume does not repeat the run with unchanged inputs.
+        _record_run(conn, env, plan, state, step, 'passed' if result[0] == 0 else 'product-failure',
+                    '' if result[0] == 0 else 'the %s command (exit %s) failed:\n%s' % (step, result[0], result[1]))
     if result == "lost" or result[0] != 0:
         state["steps"].pop(step, None)   # the step runs again at the resume
         if result == 'lost' and step == 'Deploy':
@@ -1175,6 +1201,90 @@ def _uncertain_deploy(conn, env, plan, state):
                    log_file=state.get('log_file'), reason=reason)
     save(conn, env.name, plan, state)
     return result
+
+
+def _run_inputs(env, step, head):
+    """What a complete test run depends on: the checked commit, the command and the project configuration."""
+    import hashlib
+    configuration = hashlib.sha256(json.dumps(env.settings, sort_keys=True, default=str).encode()).hexdigest()
+    return {'step': step, 'commit': head or '', 'command': commands(env).get(step) or '', 'configuration': configuration}
+
+
+def last_run(conn, project, plan, step):
+    """The record of the latest completed run of a step: reason, scope, commit, duration and result."""
+    try:
+        return json.loads(runtime.kv_get(conn, project, RUN_KEY + plan + ':' + step) or 'null')
+    except ValueError:
+        return None
+
+
+def _plan_run(conn, env, plan, step, folder, head):
+    """(run inputs with their reason, None) for a new run, or (None, action) when the latest result still applies."""
+    inputs = _run_inputs(env, step, head)
+    previous = last_run(conn, env.name, plan, step)
+    same = bool(head) and bool(previous) and all(previous.get(k) == v for k, v in inputs.items())
+    if same and previous.get('result') == 'product-failure':
+        text = ('Not repeated: run %s at commit %s failed with the same command and configuration.\n%s'
+                % (previous.get('run'), head, previous.get('failure', '')))
+        return None, lambda conn, env, plan, state, step: _red(conn, env, plan, state, step, text)
+    reason = ''
+    if same and previous.get('result') == 'passed':
+        artifacts = previous.get('artifacts')
+        reason = ('the run declared no artifact identities' if not isinstance(artifacts, dict) else
+                  check_events.verify({'head': head, 'checks': {'suite': {'artifacts': artifacts}}}, folder, head))
+        if not reason:
+            text = 'result of run %s reused: commit, command, configuration and artifacts unchanged' % previous.get('run')
+            return None, lambda conn, env, plan, state, step: _done(conn, env, plan, state, step, text)
+        reason = 'previous pass not reusable: ' + reason
+    elif same:
+        reason = 'previous run gave no product verdict (%s)' % previous.get('result')
+    elif previous:
+        reason = 'changed ' + ', '.join(k for k in ('commit', 'command', 'configuration') if previous.get(k) != inputs[k])
+    return dict(inputs, reason=reason or 'first run', started=time.time(), started_at=db.now()), None
+
+
+def _mark_run(state, step, **fields):
+    run = state.get('run')
+    if run and run.get('step') == step:
+        run.update(fields)
+
+
+def _record_run(conn, env, plan, state, step, result, failure=''):
+    """Close the running complete test run of this step with its result; other steps have none."""
+    run = state.get('run')
+    if not run or run.get('step') != step:
+        return
+    state.pop('run')
+    record = {k: v for k, v in run.items() if k not in ('started', 'infrastructure')}
+    record.update(result=result, finished_at=db.now(), duration_s=round(time.time() - run['started'], 1),
+                  failure=str(failure)[:4000], report=state.get('check_report', '') if failure else '')
+    if result != 'passed':
+        record.pop('artifacts', None)
+    runtime.kv_set(conn, env.name, RUN_KEY + plan + ':' + step, json.dumps(record))
+
+
+def _environment_wait(conn, env, plan, state, step, error):
+    """A complete test run failed in its environment, not in the product: report it and retry the step on the owner's answer."""
+    if step in ('Merge', 'Check', 'Build', 'Push'):
+        _replay_followers(conn, env, plan)
+    item = 'integration-environment-' + step.lower()
+    pending = runtime.list_questions(conn, env.name, status='open', plan=plan, item=item)
+    qid = pending[0]['id'] if pending else db.add_question(
+        conn, env.name, plan, item,
+        'The complete test at %s failed in its test environment, not in the product of this plan. No fix agent was started. '
+        'Correct the environment, then answer to run this step again. Finding: %s' % (step, error),
+        'Correct the test environment and confirm when this step may run again. Completed integration steps are retained.')
+    _finish_log(state, 1, message=error)
+    state['steps'][step] = 'red'
+    state['phase'] = 'blocked'
+    state['blocked'] = {'kind': 'environment', 'question': qid, 'step': step}
+    state['placed'] = False
+    state.pop('fix', None)
+    save(conn, env.name, plan, state)
+    hives.release_integration(conn, env.name, plan)
+    _blocker(conn, env, plan, 'waiting for a test environment correction (question %s)' % qid)
+    _set_status(conn, env, plan, 'WAITING')
+    return None
 
 
 def authentication_failure(error):
@@ -1215,8 +1325,14 @@ def _access_wait(conn, env, plan, state, step, error):
 
 def _red(conn, env, plan, state, step, error):
     """A step is red: the place is released and a fix agent starts."""
+    run = state.get('run') or {}
+    environment = run.get('step') == step and run.get('infrastructure')
+    _record_run(conn, env, plan, state, step, 'infrastructure' if environment or authentication_failure(error)
+                else 'product-failure', error)
     if authentication_failure(error):
         return _access_wait(conn, env, plan, state, step, error)
+    if environment:
+        return _environment_wait(conn, env, plan, state, step, error)
     path = state.get("log_file")
     if not path or action_logs.read(path)[0]["step"] != step:
         path = _start_log(conn, env, plan, state, step)
@@ -1922,7 +2038,7 @@ def _advance_blocked(conn, env, plan, state):
         state.pop('blocked', None)
         save(conn, env.name, plan, state)
         return None
-    if state['blocked'].get('kind') == 'access':
+    if state['blocked'].get('kind') in ('access', 'environment'):
         state['step'] = state['blocked']['step']
         state['phase'] = 'pipeline'
         state['steps'][state['step']] = 'todo'

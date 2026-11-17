@@ -283,8 +283,12 @@ def make_stub(name: str):
 
 # Acquire or release the shared integration place and clean worktrees after release.
 def cmd_integration(args, conn):
-    """Acquire or release the integration place, cleaning worktrees after release."""
+    """Acquire or release the integration place, cleaning worktrees after release; runs reads the complete test run records."""
     from haivequeen import hives
+    if args.action == "runs":
+        from haivequeen import orchestrator
+        out({step: orchestrator.last_run(conn, args.project, args.plan, step) for step in orchestrator.RUN_STEPS})
+        return 0
     agent = os.environ.get("BZZ_AGENT")
     row = runtime.get_agent(conn, args.project, agent) if agent else None
     if agent and (not row or row.get("phase") != "queen" or not _plan_matches(conn, args.project, row.get("plan_path"), args.plan)):
@@ -689,7 +693,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_owner)
 
     p = sub.add_parser("integration")
-    p.add_argument("action", choices=["acquire", "release"])
+    p.add_argument("action", choices=["acquire", "release", "runs"])
     p.add_argument("--project", required=True)
     p.add_argument("--plan", required=True)
     p.add_argument("--owner-pid", type=int)
