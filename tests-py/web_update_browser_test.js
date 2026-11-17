@@ -4,6 +4,8 @@ window.addEventListener('load', async () => {
   try {
     await wait(()=>document.querySelector('#update-status button') && document.querySelector('[data-panel="Hives"]'));
     const update=document.querySelector('#update-status');
+    // The offer renders after the first update-status button; wait for it, then assert it.
+    await wait(()=>[...update.querySelectorAll('button')].some(b=>b.textContent==='Update to v2')).catch(()=>{});
     const install=[...update.querySelectorAll('button')].find(b=>b.textContent==='Update to v2');
     assert(install,'release offer missing');
     install.click();await wait(()=>document.querySelector('#confirmation-dialog')?.open);
