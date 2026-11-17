@@ -34,6 +34,7 @@ def alive(pid):
         k.CloseHandle(handle)
 
 
+@unittest.skipUnless(sys.platform == 'win32', 'Windows console supervision')
 class RoutingTests(unittest.TestCase):
     def test_breakaway_and_inherit_all_get_a_broker_of_their_own(self):
         info = subprocess.STARTUPINFO()

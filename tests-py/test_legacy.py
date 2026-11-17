@@ -95,7 +95,9 @@ class LegacyTest(unittest.TestCase):
         """Row counts of all imported tables."""
         conn = sqlite3.connect(str(self.base / "data" / "haivequeen.db"))
         try:
-            return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            # The one-time data step marker of the shared database is no imported row.
+            marker = {"kv": " WHERE NOT (project='' AND key='decision-notes-retired')"}
+            return {t: conn.execute(f"SELECT COUNT(*) FROM {t}" + marker.get(t, "")).fetchone()[0]
                     for t in ("agents", "events", "build_measurements", "providers_usage", "handled", "nofollow",
                               "questions", "decisions", "queue", "kv", "plans", "packages")}
         finally:

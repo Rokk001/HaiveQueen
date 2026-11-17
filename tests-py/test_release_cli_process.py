@@ -102,9 +102,9 @@ class ReleaseCliProcessTest(RoundCase):
             self.skipTest('Node is required')
         log = (self.base / 'browser-driver.log').open('w', encoding='utf-8')
         # Chromium keeps its certificate store and crash reports in the XDG folders, not in the profile.
+        # HOME stays: a Snap browser does not start with a home below the temp folder.
         home = self.base / 'browser-home'
-        browser_env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / 'config'),
-                           XDG_DATA_HOME=str(home / 'data'), XDG_CACHE_HOME=str(home / 'cache'))
+        browser_env = dict(os.environ, XDG_CONFIG_HOME=str(home / 'config'), XDG_DATA_HOME=str(home / 'data'))
         process = subprocess.Popen(['node', str(driver), browser, status['url']+'/login', str(profile), reason],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, env=browser_env)
         try:
