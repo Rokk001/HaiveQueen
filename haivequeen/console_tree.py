@@ -387,14 +387,20 @@ class _Broker:
         try:
             os.set_handle_inheritable(request_read, True)
             os.set_handle_inheritable(reply_write, True)
-            self.process = _launch(original, request_read, reply_write, [], False)
-        except BaseException:
-            for handle in (self.request, self.reply):
-                _winapi.CloseHandle(handle)
-            raise
-        finally:
+            launcher = _launch(original, request_read, reply_write, [], False)
+            _winapi.CloseHandle(launcher)
             for handle in (request_read, reply_write):
                 _winapi.CloseHandle(handle)
+            request_read = reply_write = None
+            # A virtual environment's pythonw.exe only starts the real interpreter as its child:
+            # inherited handles must go to the supervisor that names itself here.
+            pid = _receive(self.reply)
+            self.process = _winapi.OpenProcess(0x00100000 | 0x1000 | 0x0040, False, pid)   # SYNCHRONIZE, QUERY_LIMITED, DUP_HANDLE
+        except BaseException:
+            for handle in (self.request, self.reply, request_read, reply_write):
+                if handle is not None:
+                    _winapi.CloseHandle(handle)
+            raise
 
     def alive(self):
         import _winapi
@@ -502,6 +508,7 @@ def _create_once(original, args):
         _send(request_write, (args, os.getcwd()))
         _winapi.CloseHandle(request_write)   # one request only: the broker supervises and then ends
         owned.remove(request_write)
+        _receive(reply_read)   # the supervisor's process id; this broker inherited what it needs
         value = _receive(reply_read)
         if isinstance(value, BaseException):
             raise value
@@ -566,6 +573,7 @@ def _serve(request, reply, parent_pid):
     debugger = _Debugger()
     accepting = True
     try:
+        _send(reply, os.getpid())
         while accepting or debugger.busy():
             if accepting and (not debugger.busy() or _waiting(request)):
                 try:

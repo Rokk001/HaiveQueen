@@ -119,7 +119,8 @@ class NoConsoleTest(unittest.TestCase):
                                       "print(p.pid)" % child)
             release.touch()
             deadline = time.monotonic() + 15
-            while not result.exists() and time.monotonic() < deadline:
+            # The probe creates the file before it writes the value.
+            while not (result.exists() and result.read_text()) and time.monotonic() < deadline:
                 time.sleep(0.02)
             self.assertTrue(result.exists(), out)
             self.assertEqual(result.read_text(), '0', out)
