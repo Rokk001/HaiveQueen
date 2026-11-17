@@ -128,6 +128,19 @@ debugger together with it, so a supervisor left inside the job would end the loo
 Focused regressions: `python -m unittest discover -s tests-py -p test_outside_agent_job.py -v` and
 `test_shared_console_broker.py` (a real job whose end must not end a detached start).
 
+### A loop that ends unexpectedly
+
+A loop that ends without `bzz stop`, a clean end or a system restart leaves its lock
+behind. The web service looks for this every 30 seconds instead of leaving it to the
+next manual start: it reports the end once (event and the status-panel fault
+`loop_vanished`) and starts the loop again in the background, keeping a pause of the
+run. The restarted loop reconciles the agents of the ended loop like after any
+interruption: living ones stay running, vanished ones fail by the existing rules.
+After 3 automatic restarts within an hour the fault stays for the owner and the next
+attempt waits until the hour has passed. If the web service itself is gone, the next
+start reports the end as before.
+Focused regression: `test_loop_watch.py`.
+
 ## Program starts on Windows
 
 Every program HaiveQueen starts on Windows runs under its console supervisor

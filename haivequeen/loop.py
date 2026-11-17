@@ -727,6 +727,70 @@ def report_loop_failure(conn, text: str) -> None:
     faults.file_global_fault(conn, "loop_vanished", text)   # belongs to no Apiary: status panel and desktop message, no inbox question
 
 
+LOOP_WATCH_SECONDS = 30      # how often the web service looks for a loop that ended unexpectedly
+LOOP_RESTART_LIMIT = 3       # automatic restarts within an hour; beyond it the fault stays for the owner
+REPORTED_KEY = "loop-vanished-reported"   # pid of the ended loop whose end is already reported
+RESTARTS_KEY = "loop-watch-restarts"      # times of the automatic restarts of the last hour
+
+
+def unexpected_end(conn) -> int:
+    """Process id of a loop that ended without stop, crash report or system restart, else 0.
+
+    A loop that ends normally or with an exception removes its lock; a killed one leaves it behind."""
+    try:
+        pid = int(lock_file().read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return 0
+    if osplat.process_alive(pid) or stop_flag().exists() or start_pending():
+        return 0
+    last = read_state(conn) or {}
+    if last.get("status") == "ended":
+        return 0
+    heartbeat = db.parse_time(runtime.kv_get(conn, sch.GLOBAL, "loop-heartbeat") or last.get("since") or "")
+    boot = system_boot_time()
+    if boot is not None and heartbeat is not None and boot > heartbeat:
+        return 0   # the machine restarted: nothing ended unexpectedly
+    return pid
+
+
+def report_vanished_loop(conn, pid: int) -> bool:
+    """Report the unexpected end of loop `pid` once; True when this call reported it."""
+    if runtime.kv_get(conn, sch.GLOBAL, REPORTED_KEY) == str(pid):
+        return False
+    last = read_state(conn) or {}
+    report_loop_failure(conn, "Loop ended unexpectedly (pid %d, last state %s since %s)" % (pid, last.get("status"), last.get("since")))
+    runtime.kv_set(conn, sch.GLOBAL, REPORTED_KEY, str(pid))
+    return True
+
+
+def watch_loop(conn, restart=None, now=None) -> str:
+    """Notice a loop that ended unexpectedly while nothing restarts it: report it and start it again.
+
+    Returns '' (nothing to do), 'restarted' or 'reported' (restart limit reached). Agents the ended loop had started
+    are reconciled by the restarted loop like after any interruption (reattach)."""
+    pid = unexpected_end(conn)
+    if not pid:
+        return ""
+    report_vanished_loop(conn, pid)
+    now = now or datetime.now()
+    try:
+        recent = [t for t in json.loads(runtime.kv_get(conn, sch.GLOBAL, RESTARTS_KEY) or "[]")
+                  if now - datetime.fromisoformat(t) < timedelta(hours=1)]
+    except (ValueError, TypeError):
+        recent = []
+    if len(recent) >= LOOP_RESTART_LIMIT:
+        return "reported"
+    runtime.kv_set(conn, sch.GLOBAL, RESTARTS_KEY, json.dumps(recent + [now.isoformat(timespec="seconds")]))
+    (restart or restart_loop)()
+    return "restarted"
+
+
+def restart_loop() -> None:
+    """Start the loop again as `bzz start` would, keeping a pause of the run."""
+    spawn_detached([osplat.python_executable(), str(TOOLS_DIR / "haivequeen" / "cli.py"), "start", "--no-browser", "--keep-pause"],
+                   osplat.runs_dir() / "beekeeper.log")
+
+
 # Run rounds until the STOP flag exists (or `rounds` rounds are done), then wait for the running agents and end.
 def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, sleep=time.sleep,
              wait_seconds: float = 2.0, round_kwargs: dict = None) -> int:
@@ -763,7 +827,8 @@ def run_loop(conn, machine: dict, rounds: int = 0, round_minutes: float = 0, sle
         if vanished:
             crash.write(vanished + "\n")
             crash.flush()
-            report_loop_failure(conn, vanished)
+            if runtime.kv_get(conn, sch.GLOBAL, REPORTED_KEY) != str(pid):   # not already reported by the web service's watch
+                report_loop_failure(conn, vanished)
         runtime.kv_set(conn, sch.GLOBAL, "loop-started-at", datetime.now().isoformat(timespec="seconds"))
         try:
             result = _run_loop(conn, machine, rounds, round_minutes, sleep, wait_seconds, round_kwargs or {})

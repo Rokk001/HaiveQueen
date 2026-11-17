@@ -167,8 +167,12 @@ class Service:
             # Publish the running service first so the tray can discover it.
             from . import tray
             tray.ensure_started()
+            watched = time.monotonic()
             while not self.stopping:
                 self.control.handle_request()
+                if time.monotonic() - watched >= loop.LOOP_WATCH_SECONDS:
+                    watched = time.monotonic()
+                    _watch_loop()
                 if loop.version_switch_requested():
                     self.version_handover = True
                     self.stopping = True
@@ -204,6 +208,18 @@ class Service:
         elif self.restarting:
             start()
         return 0
+
+
+def _watch_loop():
+    """The web service outlives an agent's job: a loop that ended unexpectedly is reported and restarted from here."""
+    from contextlib import closing
+    from . import db, loop
+    try:
+        with closing(db.connect(config.db_path())) as conn:
+            loop.watch_loop(conn)
+    except Exception:   # the watch must never end the web service
+        import logging
+        logging.exception('Loop watch failed')
 
 
 def start():
