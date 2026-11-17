@@ -223,6 +223,9 @@ USAGE_INTERVAL = 60              # seconds between usage checks of a model provi
 USAGE_UNREACHABLE_INTERVAL = 600   # seconds between usage checks of a provider whose last check failed (not reachable)
 
 
+CLOCK_TOLERANCE = 1.0   # seconds a fresh reading may appear ahead of the current time
+
+
 def quota_block_reason(conn, provider, now=None):
     """Explain the same cached observation gate used to authorize starts."""
     if conn is None:
@@ -242,8 +245,11 @@ def quota_block_reason(conn, provider, now=None):
         if saved.tzinfo is None:
             saved = saved.astimezone()
         age = now - saved.timestamp()
-        if age < 0:
+        # Microsecond rounding of the stored time and a coarse system clock can put a reading
+        # taken just now slightly ahead of the current time; only a real future time is invalid.
+        if age < -CLOCK_TOLERANCE:
             return 'quota unknown: observation timestamp is in the future'
+        age = max(age, 0.0)
         if age >= USAGE_INTERVAL:
             return 'quota stale: observation %.1f s old, freshness limit %s s' % (age, USAGE_INTERVAL)
         windows = [_claude_window(snapshot[key], True, int(now))
