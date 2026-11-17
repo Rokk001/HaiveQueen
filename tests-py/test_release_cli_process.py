@@ -101,8 +101,12 @@ class ReleaseCliProcessTest(RoundCase):
         if not shutil.which('node'):
             self.skipTest('Node is required')
         log = (self.base / 'browser-driver.log').open('w', encoding='utf-8')
+        # Chromium keeps its certificate store and crash reports in the XDG folders, not in the profile.
+        home = self.base / 'browser-home'
+        browser_env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / 'config'),
+                           XDG_DATA_HOME=str(home / 'data'), XDG_CACHE_HOME=str(home / 'cache'))
         process = subprocess.Popen(['node', str(driver), browser, status['url']+'/login', str(profile), reason],
-                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True)
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, env=browser_env)
         try:
             milestone = read_line(process)
             self.assertEqual(milestone, 'CANCELLED', (self.base / 'browser-driver.log').read_text(encoding='utf-8')[-6000:])

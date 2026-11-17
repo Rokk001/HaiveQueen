@@ -41,19 +41,22 @@ class WindowsProcessScanTests(unittest.TestCase):
             cwd = Path(temp) / 'Working Directory'
             cwd.mkdir()
             marker = '--path=' + command_dir.as_posix().upper()
-            with subprocess.Popen([sys.executable, '-I', '-c', 'import sys; sys.stdin.read()', marker],
-                                  cwd=cwd, stdin=subprocess.PIPE) as child:
+            with subprocess.Popen([sys.executable, '-I', '-c', 'import sys; print(flush=True); sys.stdin.read()', marker],
+                                  cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as child:
+                child.stdout.readline()   # its process parameters are complete once it runs Python code
                 with patch.object(process_scan._WindowsProcesses, 'pids',
                                   return_value=[0, child.pid]):
                     try:
                         self.assertIs(process_scan.scan(command_dir), True)
                         self.assertIs(process_scan.scan(cwd), True)
                         self.assertIs(process_scan.scan(Path(sys.executable).parent), True)
-                        self.assertIs(process_scan.scan(Path(temp) / 'absent'), False)
+                        # A live process without a match may still use the folder through loaded code.
+                        self.assertIsNone(process_scan.scan(Path(temp) / 'absent'))
                     finally:
                         child.stdin.close()
                         child.wait(timeout=10)
                     self.assertIs(process_scan.scan(cwd), False)
+                    self.assertIs(process_scan.scan(Path(temp) / 'absent'), False)
 
     def test_incomplete_table_and_unreadable_process_are_uncertain(self):
         directory = Path.cwd()
