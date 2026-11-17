@@ -436,6 +436,10 @@ class _Broker:
                 raise OSError('Console supervisor ended')
             if args[4]:
                 args[8] = self.transfer(args[8])
+            if args[6] is None:
+                # The broker's own environment is the caller's at the broker's start;
+                # a command inherits the caller's environment of now.
+                args[6] = dict(os.environ)
             _send(self.request, (args, os.getcwd()))
         except OSError as exc:
             raise _NotDelivered(str(exc)) from exc

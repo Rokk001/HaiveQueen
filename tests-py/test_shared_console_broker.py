@@ -86,6 +86,18 @@ class SharedBrokerTests(unittest.TestCase):
         self.assertEqual(len({parent for parent, _word in rows}), 1, rows)   # one supervisor created all three
         self.assertNotEqual(rows[0][0], str(child.pid))
 
+    def test_later_starts_inherit_the_callers_current_environment(self):
+        child = run_child('''
+            import os
+            probe = [sys.executable, '-I', '-c', 'import os; print(os.environ.get("BROKER_PROBE", "-"))']
+            print(subprocess.run(probe, capture_output=True, text=True, check=True).stdout.strip())
+            os.environ['BROKER_PROBE'] = 'changed'
+            print(subprocess.run(probe, capture_output=True, text=True, check=True).stdout.strip())
+        ''')
+        out, err = child.communicate(timeout=60)
+        self.assertEqual(child.returncode, 0, err)
+        self.assertEqual(out.split(), ['-', 'changed'])
+
     def test_detached_start_outside_the_job_survives_the_end_of_the_callers_job(self):
         k = ctypes.WinDLL('kernel32', use_last_error=True)
         k.CreateJobObjectW.restype = ctypes.c_void_p
